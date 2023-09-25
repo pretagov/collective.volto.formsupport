@@ -228,7 +228,7 @@ class SubmitPost(Service):
                     if field_id:
                         for data in self.form_data.get("data", ""):
                             if data.get("field_id", "") == field_id:
-                                return data["value"]
+                                return data.get("value", "")
 
         return self.form_data.get("from", "") or self.block.get("default_from", "")
 
