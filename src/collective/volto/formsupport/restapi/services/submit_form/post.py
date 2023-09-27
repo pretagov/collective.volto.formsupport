@@ -82,7 +82,7 @@ class SubmitPost(Service):
                             **field,
                             **submitted_field,
                             "dislpay_value_mapping": field.get(
-                                "internal_value"  # TODO: Rename frontend property passed in, internal_value doens't make sense
+                                "display_values"
                             ),
                         }
                     )
@@ -413,7 +413,7 @@ class SubmitPost(Service):
         xmlRoot = Element("form")
 
         for field in self.filter_parameters():
-            SubElement(xmlRoot, "field", name=field.label).text = str(field.value)
+            SubElement(xmlRoot, "field", name=field.label).text = str(field._value)
 
         doc = ElementTree(xmlRoot)
         doc.write(output, encoding="utf-8", xml_declaration=True)
