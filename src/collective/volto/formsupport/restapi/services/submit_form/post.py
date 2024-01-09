@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 
+
 import codecs
 import logging
 import math
@@ -81,7 +82,7 @@ class SubmitPost(Service):
                         {
                             **field,
                             **submitted_field,
-                            "dislpay_value_mapping": field.get("display_values"),
+                            "display_value_mapping": field.get("display_values"),
                         }
                     )
         self.fields = construct_fields(fields_data)
@@ -306,13 +307,12 @@ class SubmitPost(Service):
 
             self.manage_attachments(msg=msg)
 
-            if should_send:
-                if isinstance(should_send, list):
-                    if "recipient" in self.block.get("send", []):
-                        self.send_mail(msg=msg, charset=charset)
-                    # Backwards compatibility for forms before 'acknowledgement' sending
-                else:
+            if isinstance(should_send, list):
+                if "recipient" in self.block.get("send", []):
                     self.send_mail(msg=msg, charset=charset)
+                # Backwards compatibility for forms before 'acknowledgement' sending
+            else:
+                self.send_mail(msg=msg, charset=charset)
 
             # send a copy also to the fields with bcc flag
             for bcc in self.get_bcc():
@@ -411,7 +411,7 @@ class SubmitPost(Service):
         xmlRoot = Element("form")
 
         for field in self.filter_parameters():
-            SubElement(xmlRoot, "field", name=field.label).text = str(field._value)
+            SubElement(xmlRoot, "field", name=field.field_id).text = str(field._value)
 
         doc = ElementTree(xmlRoot)
         doc.write(output, encoding="utf-8", xml_declaration=True)
