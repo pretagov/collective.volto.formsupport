@@ -12,13 +12,13 @@ from plone.registry.interfaces import IRegistry
 from plone.restapi.testing import RelativeSession
 from Products.MailHost.interfaces import IMailHost
 from six import StringIO
-import xml.etree.ElementTree as ET
 from zope.component import getUtility
 
-import transaction
-import unittest
 import base64
 import os
+import transaction
+import unittest
+import xml.etree.ElementTree as ET
 
 
 class TestMailSend(unittest.TestCase):
@@ -601,7 +601,6 @@ class TestMailSend(unittest.TestCase):
                     {
                         "field_id": "contact",
                         "field_type": "from",
-                        "use_as_bcc": True,
                     },
                 ],
             },
@@ -653,7 +652,6 @@ class TestMailSend(unittest.TestCase):
                     {
                         "field_id": "contact",
                         "field_type": "from",
-                        "use_as_bcc": True,
                     },
                 ],
             },
@@ -745,8 +743,8 @@ class TestMailSend(unittest.TestCase):
         self.assertIn(
             """<thead>
       <tr role="row">
-        <th scope="col" role="columnheader">Field</th>
-        <th scope="col" role="columnheader">Value</th>
+        <th align="left" scope="col" role="columnheader">Field</th>
+        <th align="left" scope="col" role="columnheader">Value</th>
       </tr>
     </thead>""",
             msg,
@@ -754,16 +752,16 @@ class TestMailSend(unittest.TestCase):
 
         self.assertIn(
             """<tr role="row">
-          <th scope="row" role="rowheader">Name</th>""",
+          <th align="left" scope="row" role="rowheader">Name</th>""",
             msg,
         )
-        self.assertIn(f"<td>{name}</td>", msg)
+        self.assertIn(f'<td align="left">{name}</td>', msg)
         self.assertIn(
             """<tr role="row">
-          <th scope="row" role="rowheader">""",
+          <th align="left" scope="row" role="rowheader">""",
             msg,
         )
-        self.assertIn(f"<td>{message}</td>", msg)
+        self.assertIn(f'<td align="left">{message}</td>', msg)
 
     def test_email_body_formated_as_list(
         self,
