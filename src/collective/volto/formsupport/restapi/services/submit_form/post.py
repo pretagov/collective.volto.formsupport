@@ -14,6 +14,7 @@ from plone import api
 from plone.protect.interfaces import IDisableCSRFProtection
 from plone.registry.interfaces import IRegistry
 from plone.restapi.deserializer import json_body
+from plone.restapi.serializer.converters import json_compatible
 from plone.restapi.services import Service
 from Products.CMFPlone.interfaces.controlpanel import IMailSchema
 from zExceptions import BadRequest
@@ -87,6 +88,24 @@ class SubmitPost(Service):
                         }
                     )
         self.fields = construct_fields(fields_data)
+
+        errors = {}
+        for field in self.fields:
+            field_errors = field.validate()
+
+            if field_errors:
+                errors[field.field_id] = field_errors
+
+        if errors:
+            self.request.response.setStatus(400)
+            return json_compatible(
+                {
+                    "error": {
+                        "type": "Invalid",
+                        "errors": errors,
+                    }
+                }
+            )
 
         if send_action:
             try:

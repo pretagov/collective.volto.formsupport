@@ -1,15 +1,28 @@
 # -*- coding: utf-8 -*-
-from collective.volto.formsupport.interfaces import ICaptchaSupport
-from collective.volto.formsupport.interfaces import ICollectiveVoltoFormsupportLayer
+import os
+
 from plone import api
 from plone.restapi.behaviors import IBlocks
 from plone.restapi.interfaces import IBlockFieldSerializationTransformer
 from Products.CMFPlone.interfaces import IPloneSiteRoot
-from zope.component import adapter
-from zope.component import getMultiAdapter
+from zope.component import adapter, getMultiAdapter
 from zope.interface import implementer
 
-import os
+from collective.volto.formsupport.interfaces import (
+    ICaptchaSupport,
+    ICollectiveVoltoFormsupportLayer,
+)
+
+IGNORED_VALIDATION_DEFINITION_ARGUMENTS = [
+    "title",
+    "description",
+    "name",
+    "errmsg",
+    "regex",
+    "regex_strings",
+    "ignore",
+    "_internal_type",
+]
 
 
 class FormSerializer(object):
@@ -37,9 +50,33 @@ class FormSerializer(object):
         attachments_limit = os.environ.get("FORM_ATTACHMENTS_LIMIT", "")
         if attachments_limit:
             value["attachments_limit"] = attachments_limit
+
+        for index, field in enumerate(value.get("subblocks", [])):
+            if field.get("validationSettings"):
+                value["subblocks"][index] = self._expand_validation_field(field)
+
         if api.user.has_permission("Modify portal content", obj=self.context):
             return value
         return {k: v for k, v in value.items() if not k.startswith("default_")}
+
+    def _expand_validation_field(self, field):
+        """Adds the individual validation settings to the `validationSettings` key in the format `{validation_id}-{setting_name}`"""
+        validation_settings = field.get("validationSettings")
+        settings_to_add = {}
+        for validation_id, settings in validation_settings.items():
+            if not isinstance(settings, dict):
+                continue
+            cleaned_settings = {
+                f"{validation_id}-{setting_name}": val
+                for setting_name, val in settings.items()
+                if setting_name not in IGNORED_VALIDATION_DEFINITION_ARGUMENTS
+            }
+
+            if cleaned_settings:
+                settings_to_add = {**settings_to_add, **cleaned_settings}
+        field["validationSettings"] = {**validation_settings, **settings_to_add}
+
+        return field
 
 
 @implementer(IBlockFieldSerializationTransformer)
