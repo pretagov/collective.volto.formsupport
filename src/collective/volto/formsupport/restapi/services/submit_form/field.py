@@ -68,7 +68,7 @@ class Field:
         show_when_validator = show_when_validators[show_when_is]
         if not show_when_validator:
             return always_show_validator
-        return show_when_validator(value=self.value, target_value=target_value)
+        return show_when_validator(value=self.internal_value, target_value=target_value)
 
     @property
     def label(self):
