@@ -306,8 +306,9 @@ class PostAdapter:
                 {
                     **field,
                     **submitted_field,
+                    "id": submitted_field["field_id"],  # Ensure we always use the submitted field id
                     "display_value_mapping": field.get("display_values"),
-                    "custom_field_id": self.block.get(field["field_id"]),
+                    "custom_field_id": self.block.get(submitted_field["field_id"]),
                     # We're straying from how validations are serialized and deserialized here to make our lives easier.
                     #   Let's use a dictionary of {'validation_id': {'setting_id': 'setting_value'}} when working inside fields for simplicity.
                     "validations": validations_for_field,
