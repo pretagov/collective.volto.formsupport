@@ -56,17 +56,20 @@ class PostAdapter:
             if show_when and show_when != "always":
                 target_field = [
                     val for val in filtered_fields if val.id == field.show_when_when
-                ][0]
-                should_show = (
-                    target_field.should_show(
-                        show_when_is=field.show_when_is, target_value=field.show_when_to
+                ]
+                # We're an array at this point
+                if target_field:
+                    target_field = target_field[0]
+                    should_show = (
+                        target_field.should_show(
+                            show_when_is=field.show_when_is, target_value=field.show_when_to
+                        )
+                        if target_field
+                        else True
                     )
-                    if target_field
-                    else True
-                )
 
             if should_show:
-                field_errors = field.validate()
+                field_errors = field.validate(self.request)
 
                 if field_errors:
                     errors[field.field_id] = field_errors
@@ -263,9 +266,7 @@ class PostAdapter:
         """
         do not send attachments fields.
         """
-        fields_to_send = [field for field in self.format_fields() if field.send_in_email]
-
-        return
+        return [field for field in self.format_fields() if field.send_in_email]
 
     def format_fields(self):
         fields_data = []
@@ -286,9 +287,9 @@ class PostAdapter:
             #                 "custom_field_id": self.block.get(field["field_id"]),
             #             }
             #         )
+            validations_for_field = {}
             for field in self.block.get("subblocks", []):
                 validation_ids_to_apply = field.get("validations", [])
-                validations_for_field = {}
                 for validation_and_setting_id, setting_value in field.get(
                     "validationSettings", {}
                 ).items():
@@ -301,15 +302,15 @@ class PostAdapter:
                     if validation_id not in validations_for_field:
                         validations_for_field[validation_id] = {}
                     validations_for_field[validation_id][setting_id] = setting_value
-                fields_data.append(
-                    {
-                        **field,
-                        **submitted_field,
-                        "display_value_mapping": field.get("display_values"),
-                        "custom_field_id": self.block.get(field["field_id"]),
-                        # We're straying from how validations are serialized and deserialized here to make our lives easier.
-                        #   Let's use a dictionary of {'validation_id': {'setting_id': 'setting_value'}} when working inside fields for simplicity.
-                        "validations": validations_for_field,
-                    }
-                )
+            fields_data.append(
+                {
+                    **field,
+                    **submitted_field,
+                    "display_value_mapping": field.get("display_values"),
+                    "custom_field_id": self.block.get(field["field_id"]),
+                    # We're straying from how validations are serialized and deserialized here to make our lives easier.
+                    #   Let's use a dictionary of {'validation_id': {'setting_id': 'setting_value'}} when working inside fields for simplicity.
+                    "validations": validations_for_field,
+                }
+            )
         return construct_fields(fields_data)
