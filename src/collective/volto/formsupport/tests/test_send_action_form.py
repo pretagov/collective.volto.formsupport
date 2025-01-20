@@ -1,27 +1,38 @@
-# -*- coding: utf-8 -*-
-import base64
-import os
-import unittest
-import xml.etree.ElementTree as ET
-from email.parser import Parser
-
-import transaction
-from plone import api
-from plone.app.testing import (
-    SITE_OWNER_NAME,
-    SITE_OWNER_PASSWORD,
-    TEST_USER_ID,
-    setRoles,
-)
-from plone.registry.interfaces import IRegistry
-from plone.restapi.testing import RelativeSession
-from Products.MailHost.interfaces import IMailHost
-from six import StringIO
-from zope.component import getUtility
-
 from collective.volto.formsupport.testing import (  # noqa: E501,
     VOLTO_FORMSUPPORT_API_FUNCTIONAL_TESTING,
 )
+from email.parser import Parser
+from plone import api
+from plone.app.testing import setRoles
+from plone.app.testing import SITE_OWNER_NAME
+from plone.app.testing import SITE_OWNER_PASSWORD
+from plone.app.testing import TEST_USER_ID
+from plone.registry.interfaces import IRegistry
+from plone.restapi.testing import RelativeSession
+from Products.MailHost.interfaces import IMailHost
+from zope.component import getUtility
+
+import base64
+import os
+import re
+import transaction
+import unittest
+import xml.etree.ElementTree as ET
+
+
+def _get_text_from_message(msg):
+    parsed_msgs = Parser().parsestr(msg)
+    email_message = parsed_msgs.get_payload()[0]
+
+    if not email_message.is_multipart():
+        return re.sub(r"\s+", " ", email_message.get_payload())
+
+    text_message = next(
+        message
+        for message in email_message.get_payload()
+        if message.get_content_subtype() == "plain"
+    )
+    return re.sub(r"\s+", " ", text_message.get_payload())
 
 
 class TestMailSend(unittest.TestCase):
@@ -55,6 +66,7 @@ class TestMailSend(unittest.TestCase):
             "form-id": {"@type": "form"},
         }
         self.document_url = self.document.absolute_url()
+
         transaction.commit()
 
     def tearDown(self):
@@ -72,7 +84,7 @@ class TestMailSend(unittest.TestCase):
         transaction.commit()
 
     def submit_form(self, data):
-        url = "{}/@submit-form".format(self.document_url)
+        url = f"{self.document_url}/@submit-form"
         response = self.api_session.post(
             url,
             json=data,
@@ -139,9 +151,7 @@ class TestMailSend(unittest.TestCase):
             'You need to set at least one form action between "send" and "store".',  # noqa
         )
 
-    def test_email_not_send_if_block_id_is_correct_but_form_data_missing(
-        self,
-    ):
+    def test_email_not_send_if_block_id_is_correct_but_form_data_missing(self):
         self.document.blocks = {
             "form-id": {
                 "@type": "form",
@@ -165,9 +175,37 @@ class TestMailSend(unittest.TestCase):
             "Empty form data.",
         )
 
-    def test_email_not_send_if_block_id_is_correct_but_required_fields_missing(
-        self,
-    ):
+    def test_email_not_send_if_block_id_is_correct_but_required_fields_missing(self):
+        self.document.blocks = {
+            "form-id": {
+                "@type": "form",
+                "send": ["recipient"],
+                "subblocks": [
+                    {
+                        "field_id": "xxx",
+                        "field_type": "text",
+                    },
+                ],
+            },
+        }
+        transaction.commit()
+
+        response = self.submit_form(
+            data={
+                "from": "john@doe.com",
+                "block_id": "form-id",
+                "data": [{"field_id": "xxx", "label": "foo", "value": "bar"}],
+            },
+        )
+        transaction.commit()
+        res = response.json()
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(
+            res["message"],
+            "Missing required field: subject or from.",
+        )
+
+    def test_email_not_send_if_all_fields_are_not_in_form_schema(self):
         self.document.blocks = {
             "form-id": {
                 "@type": "form",
@@ -186,18 +224,68 @@ class TestMailSend(unittest.TestCase):
         transaction.commit()
         res = response.json()
         self.assertEqual(response.status_code, 400)
-        self.assertEqual(
-            res["message"],
-            "Missing required field: subject or from.",
-        )
+        self.assertEqual(res["message"], "Empty form data.")
 
-    def test_email_sent_with_site_recipient(
-        self,
-    ):
+    def test_email_sent_with_only_fields_from_schema(self):
         self.document.blocks = {
             "form-id": {
                 "@type": "form",
                 "send": ["recipient"],
+                "subblocks": [
+                    {
+                        "field_id": "xxx",
+                        "field_type": "text",
+                    },
+                ],
+            },
+        }
+        transaction.commit()
+
+        response = self.submit_form(
+            data={
+                "from": "john@doe.com",
+                "block_id": "form-id",
+                "subject": "test subject",
+                "data": [
+                    {"label": "foo", "value": "foo", "field_id": "xxx"},
+                    {"label": "bar", "value": "bar", "field_id": "yyy"},
+                ],
+            },
+        )
+        transaction.commit()
+        res = response.json()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            res, {"data": [{"field_id": "xxx", "label": "foo", "value": "foo"}]}
+        )
+
+        msg = self.mailhost.messages[0]
+        if isinstance(msg, bytes) and bytes is not str:
+            # Python 3 with Products.MailHost 4.10+
+            msg = msg.decode("utf-8")
+        msg = re.sub(r"\s+", " ", msg)
+        self.assertIn("Subject: test subject", msg)
+        self.assertIn("From: john@doe.com", msg)
+        self.assertIn("To: site_addr@plone.com", msg)
+        self.assertIn("Reply-To: john@doe.com", msg)
+        self.assertIn("<strong>foo:</strong> foo", msg)
+        self.assertNotIn("<strong>bar:</strong> bar", msg)
+
+    def test_email_sent_with_site_recipient(self):
+        self.document.blocks = {
+            "form-id": {
+                "@type": "form",
+                "send": ["recipient"],
+                "subblocks": [
+                    {
+                        "field_id": "message",
+                        "field_type": "text",
+                    },
+                    {
+                        "field_id": "name",
+                        "field_type": "text",
+                    },
+                ],
             },
         }
         transaction.commit()
@@ -206,19 +294,24 @@ class TestMailSend(unittest.TestCase):
             data={
                 "from": "john@doe.com",
                 "data": [
-                    {"label": "Message", "value": "just want to say hi"},
-                    {"label": "Name", "value": "John"},
+                    {
+                        "field_id": "message",
+                        "label": "Message",
+                        "value": "just want to say hi",
+                    },
+                    {"field_id": "name", "label": "Name", "value": "John"},
                 ],
                 "subject": "test subject",
                 "block_id": "form-id",
             },
         )
         transaction.commit()
-        self.assertEqual(response.status_code, 204)
+        self.assertEqual(response.status_code, 200)
         msg = self.mailhost.messages[0]
         if isinstance(msg, bytes) and bytes is not str:
             # Python 3 with Products.MailHost 4.10+
             msg = msg.decode("utf-8")
+        msg = re.sub(r"\s+", " ", msg)
         self.assertIn("Subject: test subject", msg)
         self.assertIn("From: john@doe.com", msg)
         self.assertIn("To: site_addr@plone.com", msg)
@@ -226,14 +319,22 @@ class TestMailSend(unittest.TestCase):
         self.assertIn("<strong>Message:</strong> just want to say hi", msg)
         self.assertIn("<strong>Name:</strong> John", msg)
 
-    def test_email_sent_with_forwarded_headers(
-        self,
-    ):
+    def test_email_sent_with_forwarded_headers(self):
         self.document.blocks = {
             "form-id": {
                 "@type": "form",
                 "send": True,
                 "httpHeaders": [],
+                "subblocks": [
+                    {
+                        "field_id": "message",
+                        "field_type": "text",
+                    },
+                    {
+                        "field_id": "name",
+                        "field_type": "text",
+                    },
+                ],
             },
         }
         transaction.commit()
@@ -242,19 +343,24 @@ class TestMailSend(unittest.TestCase):
             data={
                 "from": "john@doe.com",
                 "data": [
-                    {"label": "Message", "value": "just want to say hi"},
-                    {"label": "Name", "value": "John"},
+                    {
+                        "field_id": "message",
+                        "label": "Message",
+                        "value": "just want to say hi",
+                    },
+                    {"field_id": "name", "label": "Name", "value": "John"},
                 ],
                 "subject": "test subject",
                 "block_id": "form-id",
             },
         )
         transaction.commit()
-        self.assertEqual(response.status_code, 204)
+        self.assertEqual(response.status_code, 200)
         msg = self.mailhost.messages[0]
         if isinstance(msg, bytes) and bytes is not str:
             # Python 3 with Products.MailHost 4.10+
             msg = msg.decode("utf-8")
+        msg = re.sub(r"\s+", " ", msg)
         self.assertIn("Subject: test subject", msg)
         self.assertIn("From: john@doe.com", msg)
         self.assertIn("To: site_addr@plone.com", msg)
@@ -271,6 +377,16 @@ class TestMailSend(unittest.TestCase):
                     "REMOTE_ADDR",
                     "PATH_INFO",
                 ],
+                "subblocks": [
+                    {
+                        "field_id": "message",
+                        "field_type": "text",
+                    },
+                    {
+                        "field_id": "name",
+                        "field_type": "text",
+                    },
+                ],
             },
         }
         transaction.commit()
@@ -279,20 +395,25 @@ class TestMailSend(unittest.TestCase):
             data={
                 "from": "john@doe.com",
                 "data": [
-                    {"label": "Message", "value": "just want to say hi"},
-                    {"label": "Name", "value": "John"},
+                    {
+                        "field_id": "message",
+                        "label": "Message",
+                        "value": "just want to say hi",
+                    },
+                    {"field_id": "name", "label": "Name", "value": "John"},
                 ],
                 "subject": "test subject",
                 "block_id": "form-id",
             },
         )
         transaction.commit()
-        self.assertEqual(response.status_code, 204)
+        self.assertEqual(response.status_code, 200)
 
         msg = self.mailhost.messages[1]
         if isinstance(msg, bytes) and bytes is not str:
             # Python 3 with Products.MailHost 4.10+
             msg = msg.decode("utf-8")
+        msg = re.sub(r"\s+", " ", msg)
         self.assertIn("Subject: test subject", msg)
         self.assertIn("From: john@doe.com", msg)
         self.assertIn("To: site_addr@plone.com", msg)
@@ -302,13 +423,21 @@ class TestMailSend(unittest.TestCase):
         self.assertIn("REMOTE_ADDR", msg)
         self.assertIn("PATH_INFO", msg)
 
-    def test_email_sent_ignore_passed_recipient(
-        self,
-    ):
+    def test_email_sent_ignore_passed_recipient(self):
         self.document.blocks = {
             "form-id": {
                 "@type": "form",
                 "send": ["recipient"],
+                "subblocks": [
+                    {
+                        "field_id": "message",
+                        "field_type": "text",
+                    },
+                    {
+                        "field_id": "name",
+                        "field_type": "text",
+                    },
+                ],
             },
         }
         transaction.commit()
@@ -318,19 +447,24 @@ class TestMailSend(unittest.TestCase):
                 "from": "john@doe.com",
                 "to": "to@spam.com",
                 "data": [
-                    {"label": "Message", "value": "just want to say hi"},
-                    {"label": "Name", "value": "John"},
+                    {
+                        "field_id": "message",
+                        "label": "Message",
+                        "value": "just want to say hi",
+                    },
+                    {"field_id": "name", "label": "Name", "value": "John"},
                 ],
                 "subject": "test subject",
                 "block_id": "form-id",
             },
         )
         transaction.commit()
-        self.assertEqual(response.status_code, 204)
+        self.assertEqual(response.status_code, 200)
         msg = self.mailhost.messages[0]
         if isinstance(msg, bytes) and bytes is not str:
             # Python 3 with Products.MailHost 4.10+
             msg = msg.decode("utf-8")
+        msg = re.sub(r"\s+", " ", msg)
         self.assertIn("Subject: test subject", msg)
         self.assertIn("From: john@doe.com", msg)
         self.assertIn("To: site_addr@plone.com", msg)
@@ -338,15 +472,23 @@ class TestMailSend(unittest.TestCase):
         self.assertIn("<strong>Message:</strong> just want to say hi", msg)
         self.assertIn("<strong>Name:</strong> John", msg)
 
-    def test_email_sent_with_block_recipient_if_set(
-        self,
-    ):
+    def test_email_sent_with_block_recipient_if_set(self):
         self.document.blocks = {
             "text-id": {"@type": "text"},
             "form-id": {
                 "@type": "form",
                 "default_to": "to@block.com",
                 "send": ["recipient"],
+                "subblocks": [
+                    {
+                        "field_id": "message",
+                        "field_type": "text",
+                    },
+                    {
+                        "field_id": "name",
+                        "field_type": "text",
+                    },
+                ],
             },
         }
         transaction.commit()
@@ -355,19 +497,24 @@ class TestMailSend(unittest.TestCase):
             data={
                 "from": "john@doe.com",
                 "data": [
-                    {"label": "Message", "value": "just want to say hi"},
-                    {"label": "Name", "value": "John"},
+                    {
+                        "field_id": "message",
+                        "label": "Message",
+                        "value": "just want to say hi",
+                    },
+                    {"field_id": "name", "label": "Name", "value": "John"},
                 ],
                 "subject": "test subject",
                 "block_id": "form-id",
             },
         )
         transaction.commit()
-        self.assertEqual(response.status_code, 204)
+        self.assertEqual(response.status_code, 200)
         msg = self.mailhost.messages[0]
         if isinstance(msg, bytes) and bytes is not str:
             # Python 3 with Products.MailHost 4.10+
             msg = msg.decode("utf-8")
+        msg = re.sub(r"\s+", " ", msg)
         self.assertIn("Subject: test subject", msg)
         self.assertIn("From: john@doe.com", msg)
         self.assertIn("To: to@block.com", msg)
@@ -375,15 +522,23 @@ class TestMailSend(unittest.TestCase):
         self.assertIn("<strong>Message:</strong> just want to say hi", msg)
         self.assertIn("<strong>Name:</strong> John", msg)
 
-    def test_email_sent_with_block_subject_if_set_and_not_passed(
-        self,
-    ):
+    def test_email_sent_with_block_subject_if_set_and_not_passed(self):
         self.document.blocks = {
             "text-id": {"@type": "text"},
             "form-id": {
                 "@type": "form",
                 "default_subject": "block subject",
                 "send": ["recipient"],
+                "subblocks": [
+                    {
+                        "field_id": "message",
+                        "field_type": "text",
+                    },
+                    {
+                        "field_id": "name",
+                        "field_type": "text",
+                    },
+                ],
             },
         }
         transaction.commit()
@@ -392,19 +547,24 @@ class TestMailSend(unittest.TestCase):
             data={
                 "from": "john@doe.com",
                 "data": [
-                    {"label": "Message", "value": "just want to say hi"},
-                    {"label": "Name", "value": "John"},
+                    {
+                        "field_id": "message",
+                        "label": "Message",
+                        "value": "just want to say hi",
+                    },
+                    {"field_id": "name", "label": "Name", "value": "John"},
                 ],
                 "block_id": "form-id",
             },
         )
         transaction.commit()
 
-        self.assertEqual(response.status_code, 204)
+        self.assertEqual(response.status_code, 200)
         msg = self.mailhost.messages[0]
         if isinstance(msg, bytes) and bytes is not str:
             # Python 3 with Products.MailHost 4.10+
             msg = msg.decode("utf-8")
+        msg = re.sub(r"\s+", " ", msg)
         self.assertIn("Subject: block subject", msg)
         self.assertIn("From: john@doe.com", msg)
         self.assertIn("To: site_addr@plone.com", msg)
@@ -412,9 +572,7 @@ class TestMailSend(unittest.TestCase):
         self.assertIn("<strong>Message:</strong> just want to say hi", msg)
         self.assertIn("<strong>Name:</strong> John", msg)
 
-    def test_email_with_use_as_reply_to(
-        self,
-    ):
+    def test_email_with_use_as_reply_to(self):
         self.document.blocks = {
             "text-id": {"@type": "text"},
             "form-id": {
@@ -428,6 +586,14 @@ class TestMailSend(unittest.TestCase):
                         "field_type": "from",
                         "use_as_reply_to": True,
                     },
+                    {
+                        "field_id": "message",
+                        "field_type": "text",
+                    },
+                    {
+                        "field_id": "name",
+                        "field_type": "text",
+                    },
                 ],
             },
         }
@@ -436,8 +602,12 @@ class TestMailSend(unittest.TestCase):
         response = self.submit_form(
             data={
                 "data": [
-                    {"label": "Message", "value": "just want to say hi"},
-                    {"label": "Name", "value": "Smith"},
+                    {
+                        "field_id": "message",
+                        "label": "Message",
+                        "value": "just want to say hi",
+                    },
+                    {"field_id": "name", "label": "Name", "value": "Smith"},
                     {"field_id": "contact", "label": "Email", "value": "smith@doe.com"},
                 ],
                 "block_id": "form-id",
@@ -445,11 +615,12 @@ class TestMailSend(unittest.TestCase):
         )
         transaction.commit()
 
-        self.assertEqual(response.status_code, 204)
+        self.assertEqual(response.status_code, 200)
         msg = self.mailhost.messages[0]
         if isinstance(msg, bytes) and bytes is not str:
             # Python 3 with Products.MailHost 4.10+
             msg = msg.decode("utf-8")
+        msg = re.sub(r"\s+", " ", msg)
         self.assertIn("Subject: block subject", msg)
         self.assertIn("From: john@doe.com", msg)
         self.assertIn("To: site_addr@plone.com", msg)
@@ -457,21 +628,28 @@ class TestMailSend(unittest.TestCase):
         self.assertIn("<strong>Message:</strong> just want to say hi", msg)
         self.assertIn("<strong>Name:</strong> Smith", msg)
 
-    def test_email_field_used_as_bcc(
-        self,
-    ):
+    def test_email_field_used_as_bcc_without_otp(self):
         self.document.blocks = {
             "text-id": {"@type": "text"},
             "form-id": {
                 "@type": "form",
                 "default_subject": "block subject",
                 "default_from": "john@doe.com",
-                "send": ["recipient"],
+                "send": False,
+                "store": True,
                 "subblocks": [
                     {
                         "field_id": "contact",
                         "field_type": "from",
                         "use_as_bcc": True,
+                    },
+                    {
+                        "field_id": "message",
+                        "field_type": "text",
+                    },
+                    {
+                        "field_id": "name",
+                        "field_type": "text",
                     },
                 ],
             },
@@ -483,29 +661,176 @@ class TestMailSend(unittest.TestCase):
                 "data": [
                     {"label": "Message", "value": "just want to say hi"},
                     {"label": "Name", "value": "Smith"},
-                    {"field_id": "contact", "label": "Email", "value": "smith@doe.com"},
+                    {
+                        "field_id": "contact",
+                        "label": "Email",
+                        "value": "smith@doe.com",
+                    },
                 ],
                 "block_id": "form-id",
             },
         )
         transaction.commit()
 
-        self.assertEqual(response.status_code, 204)
-        self.assertEqual(len(self.mailhost.messages), 2)
-        msg = self.mailhost.messages[0]
-        bcc_msg = self.mailhost.messages[1]
-        if isinstance(msg, bytes) and bytes is not str:
-            # Python 3 with Products.MailHost 4.10+
-            msg = msg.decode("utf-8")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(self.mailhost.messages), 1)
+
+        bcc_msg = self.mailhost.messages[0]
+
+        if isinstance(bcc_msg, bytes) and bytes is not str:
             bcc_msg = bcc_msg.decode("utf-8")
-        self.assertIn("To: site_addr@plone.com", msg)
-        self.assertNotIn("To: smith@doe.com", msg)
+
         self.assertNotIn("To: site_addr@plone.com", bcc_msg)
         self.assertIn("To: smith@doe.com", bcc_msg)
 
-    def test_send_attachment(
+    def test_email_field_used_as_bcc_with_wrong_otp_raise_400(self):
+        self.document.blocks = {
+            "text-id": {"@type": "text"},
+            "form-id": {
+                "@type": "form",
+                "default_subject": "block subject",
+                "default_from": "john@doe.com",
+                "send": False,
+                "store": True,
+                "email_otp_verification": True,
+                "subblocks": [
+                    {
+                        "field_id": "contact",
+                        "field_type": "from",
+                        "use_as_bcc": True,
+                    },
+                    {
+                        "field_id": "message",
+                        "field_type": "text",
+                    },
+                    {
+                        "field_id": "name",
+                        "field_type": "text",
+                    },
+                ],
+            },
+        }
+        transaction.commit()
+        response = self.submit_form(
+            data={
+                "data": [
+                    {"label": "Message", "value": "just want to say hi"},
+                    {"label": "Name", "value": "Smith"},
+                    {
+                        "field_id": "contact",
+                        "label": "Email",
+                        "value": "smith@doe.com",
+                        "otp": None,
+                    },
+                ],
+                "block_id": "form-id",
+            },
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(
+            response.json()["message"], "Missing OTP value. Unable to submit the form."
+        )
+
+    def test_email_field_used_as_bcc_without_otp_but_disabled_verification(self):
+        self.document.blocks = {
+            "text-id": {"@type": "text"},
+            "form-id": {
+                "@type": "form",
+                "default_subject": "block subject",
+                "default_from": "john@doe.com",
+                "send": False,
+                "store": True,
+                "email_otp_verification": False,
+                "subblocks": [
+                    {
+                        "field_id": "contact",
+                        "field_type": "from",
+                        "use_as_bcc": True,
+                    },
+                    {
+                        "field_id": "message",
+                        "field_type": "text",
+                    },
+                    {
+                        "field_id": "name",
+                        "field_type": "text",
+                    },
+                ],
+            },
+        }
+
+        transaction.commit()
+
+        response = self.submit_form(
+            data={
+                "data": [
+                    {"label": "Message", "value": "just want to say hi"},
+                    {"label": "Name", "value": "Smith"},
+                    {
+                        "field_id": "contact",
+                        "label": "Email",
+                        "value": "smith@doe.com",
+                        "otp": 123,
+                    },
+                ],
+                "block_id": "form-id",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+
+    def test_email_field_used_as_bcc_without_otp_but_enabled_verification_raise_400(
         self,
     ):
+        self.document.blocks = {
+            "text-id": {"@type": "text"},
+            "form-id": {
+                "@type": "form",
+                "default_subject": "block subject",
+                "default_from": "john@doe.com",
+                "send": False,
+                "store": True,
+                "email_otp_verification": True,
+                "subblocks": [
+                    {
+                        "field_id": "contact",
+                        "field_type": "from",
+                        "use_as_bcc": True,
+                    },
+                    {
+                        "field_id": "message",
+                        "field_type": "text",
+                    },
+                    {
+                        "field_id": "name",
+                        "field_type": "text",
+                    },
+                ],
+            },
+        }
+
+        transaction.commit()
+
+        response = self.submit_form(
+            data={
+                "data": [
+                    {"label": "Message", "value": "just want to say hi"},
+                    {"label": "Name", "value": "Smith"},
+                    {
+                        "field_id": "contact",
+                        "label": "Email",
+                        "value": "smith@doe.com",
+                        "otp": 123,
+                    },
+                ],
+                "block_id": "form-id",
+            },
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["message"], "smith@doe.com's OTP is wrong")
+
+    def test_send_attachment(self):
         self.document.blocks = {
             "text-id": {"@type": "text"},
             "form-id": {
@@ -516,6 +841,14 @@ class TestMailSend(unittest.TestCase):
                 "subblocks": [
                     {
                         "field_id": "test",
+                        "field_type": "text",
+                    },
+                    {
+                        "field_id": "message",
+                        "field_type": "text",
+                    },
+                    {
+                        "field_id": "name",
                         "field_type": "text",
                     },
                 ],
@@ -530,8 +863,12 @@ class TestMailSend(unittest.TestCase):
         response = self.submit_form(
             data={
                 "data": [
-                    {"label": "Message", "value": "just want to say hi"},
-                    {"label": "Name", "value": "Smith"},
+                    {
+                        "field_id": "message",
+                        "label": "Message",
+                        "value": "just want to say hi",
+                    },
+                    {"field_id": "name", "label": "Name", "value": "Smith"},
                     {"field_id": "test", "label": "Test", "value": "test text"},
                 ],
                 "block_id": "form-id",
@@ -540,12 +877,10 @@ class TestMailSend(unittest.TestCase):
         )
         transaction.commit()
 
-        self.assertEqual(response.status_code, 204)
+        self.assertEqual(response.status_code, 200)
         self.assertEqual(len(self.mailhost.messages), 1)
 
-    def test_send_attachment_validate_size(
-        self,
-    ):
+    def test_send_attachment_validate_size(self):
         os.environ["FORM_ATTACHMENTS_LIMIT"] = "1"
         self.document.blocks = {
             "text-id": {"@type": "text"},
@@ -557,6 +892,14 @@ class TestMailSend(unittest.TestCase):
                 "subblocks": [
                     {
                         "field_id": "test",
+                        "field_type": "text",
+                    },
+                    {
+                        "field_id": "message",
+                        "field_type": "text",
+                    },
+                    {
+                        "field_id": "name",
                         "field_type": "text",
                     },
                 ],
@@ -572,8 +915,12 @@ class TestMailSend(unittest.TestCase):
         response = self.submit_form(
             data={
                 "data": [
-                    {"label": "Message", "value": "just want to say hi"},
-                    {"label": "Name", "value": "Smith"},
+                    {
+                        "field_id": "message",
+                        "label": "Message",
+                        "value": "just want to say hi",
+                    },
+                    {"field_id": "name", "label": "Name", "value": "Smith"},
                     {"field_id": "test", "label": "Test", "value": "test text"},
                 ],
                 "block_id": "form-id",
@@ -605,6 +952,14 @@ class TestMailSend(unittest.TestCase):
                         "field_id": "contact",
                         "field_type": "from",
                     },
+                    {
+                        "field_id": "message",
+                        "field_type": "text",
+                    },
+                    {
+                        "field_id": "name",
+                        "field_type": "text",
+                    },
                 ],
             },
         }
@@ -613,8 +968,12 @@ class TestMailSend(unittest.TestCase):
         response = self.submit_form(
             data={
                 "data": [
-                    {"label": "Message", "value": "just want to say hi"},
-                    {"label": "Name", "value": "Smith"},
+                    {
+                        "field_id": "message",
+                        "label": "Message",
+                        "value": "just want to say hi",
+                    },
+                    {"field_id": "name", "label": "Name", "value": "Smith"},
                     {"field_id": "contact", "label": "Email", "value": "smith@doe.com"},
                 ],
                 "block_id": "form-id",
@@ -622,17 +981,17 @@ class TestMailSend(unittest.TestCase):
         )
         transaction.commit()
 
-        self.assertEqual(response.status_code, 204)
+        self.assertEqual(response.status_code, 200)
         msg = self.mailhost.messages[0]
         if isinstance(msg, bytes) and bytes is not str:
             # Python 3 with Products.MailHost 4.10+
             msg = msg.decode("utf-8")
 
-        parsed_msg = Parser().parse(StringIO(msg))
+        parsed_msg = Parser().parsestr(msg)
         self.assertEqual(parsed_msg.get("from"), "john@doe.com")
         self.assertEqual(parsed_msg.get("to"), "smith@doe.com")
         self.assertEqual(parsed_msg.get("subject"), "block subject")
-        msg_body = parsed_msg.get_payload(decode=True).decode()
+        msg_body = parsed_msg.get_payload()[1].get_payload().replace("=\r\n", "")
         self.assertIn(
             "<p>This message will be sent to the person filling in the form.</p>",
             msg_body,
@@ -656,6 +1015,14 @@ class TestMailSend(unittest.TestCase):
                         "field_id": "contact",
                         "field_type": "from",
                     },
+                    {
+                        "field_id": "message",
+                        "field_type": "text",
+                    },
+                    {
+                        "field_id": "name",
+                        "field_type": "text",
+                    },
                 ],
             },
         }
@@ -664,8 +1031,12 @@ class TestMailSend(unittest.TestCase):
         response = self.submit_form(
             data={
                 "data": [
-                    {"label": "Message", "value": "just want to say hi"},
-                    {"label": "Name", "value": "Smith"},
+                    {
+                        "field_id": "message",
+                        "label": "Message",
+                        "value": "just want to say hi",
+                    },
+                    {"field_id": "name", "label": "Name", "value": "Smith"},
                     {"field_id": "contact", "label": "Email", "value": "smith@doe.com"},
                 ],
                 "block_id": "form-id",
@@ -673,17 +1044,19 @@ class TestMailSend(unittest.TestCase):
         )
         transaction.commit()
 
-        self.assertEqual(response.status_code, 204)
+        self.assertEqual(response.status_code, 200)
 
         msg = self.mailhost.messages[0]
         if isinstance(msg, bytes) and bytes is not str:
             # Python 3 with Products.MailHost 4.10+
             msg = msg.decode("utf-8")
-        parsed_msg = Parser().parse(StringIO(msg))
+        parsed_msg = Parser().parsestr(msg)
         self.assertEqual(parsed_msg.get("from"), "john@doe.com")
         self.assertEqual(parsed_msg.get("to"), "site_addr@plone.com")
         self.assertEqual(parsed_msg.get("subject"), "block subject")
-        msg_body = parsed_msg.get_payload(decode=True).decode()
+
+        msg_body = parsed_msg.get_payload()[1].get_payload()
+        msg_body = re.sub(r"\s+", " ", msg_body)
         self.assertIn("<strong>Message:</strong> just want to say hi", msg_body)
         self.assertIn("<strong>Name:</strong> Smith", msg_body)
 
@@ -692,22 +1065,37 @@ class TestMailSend(unittest.TestCase):
             # Python 3 with Products.MailHost 4.10+
             acknowledgement_message = acknowledgement_message.decode("utf-8")
 
-        parsed_ack_msg = Parser().parse(StringIO(acknowledgement_message))
+        parsed_ack_msg = Parser().parsestr(acknowledgement_message)
         self.assertEqual(parsed_ack_msg.get("from"), "john@doe.com")
         self.assertEqual(parsed_ack_msg.get("to"), "smith@doe.com")
         self.assertEqual(parsed_ack_msg.get("subject"), "block subject")
-        ack_msg_body = parsed_ack_msg.get_payload(decode=True).decode()
+
+        ack_msg_body = (
+            parsed_ack_msg.get_payload()[1].get_payload().replace("=\r\n", "")
+        )
         self.assertIn(
             "<p>This message will be sent to the person filling in the form.</p>",
             ack_msg_body,
         )
         self.assertIn("<p>It is <strong>Rich Text</strong></p>", ack_msg_body)
 
-    def test_email_body_formated_as_table(
-        self,
-    ):
+    def test_email_body_formated_as_table(self):
         self.document.blocks = {
-            "form-id": {"@type": "form", "send": True, "email_format": "table"},
+            "form-id": {
+                "@type": "form",
+                "send": True,
+                "email_format": "table",
+                "subblocks": [
+                    {
+                        "field_id": "message",
+                        "field_type": "text",
+                    },
+                    {
+                        "field_id": "name",
+                        "field_type": "text",
+                    },
+                ],
+            },
         }
         transaction.commit()
 
@@ -719,19 +1107,20 @@ class TestMailSend(unittest.TestCase):
             data={
                 "from": "john@doe.com",
                 "data": [
-                    {"label": "Message", "value": message},
-                    {"label": "Name", "value": name},
+                    {"field_id": "message", "label": "Message", "value": message},
+                    {"field_id": "name", "label": "Name", "value": name},
                 ],
                 "subject": subject,
                 "block_id": "form-id",
             },
         )
         transaction.commit()
-        self.assertEqual(response.status_code, 204)
+        self.assertEqual(response.status_code, 200)
         msg = self.mailhost.messages[0]
         if isinstance(msg, bytes) and bytes is not str:
             # Python 3 with Products.MailHost 4.10+
             msg = msg.decode("utf-8")
+        msg = re.sub(r"\s+", " ", msg).replace(" >", ">")
 
         self.assertIn(f"Subject: {subject}", msg)
         self.assertIn("From: john@doe.com", msg)
@@ -744,33 +1133,43 @@ class TestMailSend(unittest.TestCase):
             f"<caption>Form submission data for {self.document.title}</caption>", msg
         )
         self.assertIn(
-            """<thead>
-      <tr role="row">
-        <th align="left" scope="col" role="columnheader">Field</th>
-        <th align="left" scope="col" role="columnheader">Value</th>
-      </tr>
-    </thead>""",
+            """<th align="left" role="columnheader" scope="col">Field</th>""",
+            msg,
+        )
+        self.assertIn(
+            """<th align="left" role="columnheader" scope="col">Value</th>""",
             msg,
         )
 
         self.assertIn(
-            """<tr role="row">
-          <th align="left" scope="row" role="rowheader">Name</th>""",
+            """<th align="left" role="rowheader" scope="row">Name</th>""",
             msg,
         )
+
         self.assertIn(f'<td align="left">{name}</td>', msg)
         self.assertIn(
-            """<tr role="row">
-          <th align="left" scope="row" role="rowheader">""",
+            """<th align="left" role="rowheader" scope="row">""",
             msg,
         )
         self.assertIn(f'<td align="left">{message}</td>', msg)
 
-    def test_email_body_formated_as_list(
-        self,
-    ):
+    def test_email_body_formated_as_list(self):
         self.document.blocks = {
-            "form-id": {"@type": "form", "send": True, "email_format": "list"},
+            "form-id": {
+                "@type": "form",
+                "send": True,
+                "email_format": "list",
+                "subblocks": [
+                    {
+                        "field_id": "message",
+                        "field_type": "text",
+                    },
+                    {
+                        "field_id": "name",
+                        "field_type": "text",
+                    },
+                ],
+            },
         }
         transaction.commit()
 
@@ -778,19 +1177,24 @@ class TestMailSend(unittest.TestCase):
             data={
                 "from": "john@doe.com",
                 "data": [
-                    {"label": "Message", "value": "just want to say hi"},
-                    {"label": "Name", "value": "John"},
+                    {
+                        "field_id": "message",
+                        "label": "Message",
+                        "value": "just want to say hi",
+                    },
+                    {"field_id": "name", "label": "Name", "value": "John"},
                 ],
                 "subject": "test subject",
                 "block_id": "form-id",
             },
         )
         transaction.commit()
-        self.assertEqual(response.status_code, 204)
+        self.assertEqual(response.status_code, 200)
         msg = self.mailhost.messages[0]
         if isinstance(msg, bytes) and bytes is not str:
             # Python 3 with Products.MailHost 4.10+
             msg = msg.decode("utf-8")
+        msg = re.sub(r"\s+", " ", msg)
         self.assertIn("Subject: test subject", msg)
         self.assertIn("From: john@doe.com", msg)
         self.assertIn("To: site_addr@plone.com", msg)
@@ -807,6 +1211,10 @@ class TestMailSend(unittest.TestCase):
                 "send": True,
                 "email_format": "list",
                 "subblocks": [
+                    {
+                        "field_id": "message",
+                        "field_type": "text",
+                    },
                     {
                         "field_id": "12345678",
                         "display_values": {"John": "Paul"},
@@ -840,7 +1248,11 @@ class TestMailSend(unittest.TestCase):
             data={
                 "from": "john@doe.com",
                 "data": [
-                    {"label": "Message", "value": "just want to say hi"},
+                    {
+                        "field_id": "message",
+                        "label": "Message",
+                        "value": "just want to say hi",
+                    },
                     {
                         "label": "Name",
                         "field_id": "12345678",
@@ -866,29 +1278,20 @@ class TestMailSend(unittest.TestCase):
             },
         )
         transaction.commit()
-        self.assertEqual(response.status_code, 204)
+        self.assertEqual(response.status_code, 200)
         msg = self.mailhost.messages[0]
         if isinstance(msg, bytes) and bytes is not str:
             # Python 3 with Products.MailHost 4.10+
             msg = msg.decode("utf-8")
-        self.assertIn("Subject: test subject", msg)
-        self.assertIn("From: john@doe.com", msg)
-        self.assertIn("To: site_addr@plone.com", msg)
-        self.assertIn("Reply-To: john@doe.com", msg)
-        self.assertIn("<strong>Message:</strong> just want to say hi", msg)
-        self.assertIn("<strong>Name:</strong> Paul", msg)
-        self.assertIn("<strong>Yes/ no:</strong> Correct", msg)
-        self.assertIn("<strong>Yes/ no radio without display value:</strong> True", msg)
-        self.assertNotIn(
-            "<strong>My attachment field:</strong>",
-            Parser()
-            .parse(StringIO(msg))
-            .get_payload()[0]
-            .get_payload(),  # 1st get_payload splits the messages. First message is the body and second is the attachment
-        )
-        self.assertNotIn("foo", msg)
 
-        # breakpoint()
+        message_contents = _get_text_from_message(msg)
+
+        self.assertIn("Message: just want to say hi", message_contents)
+        self.assertIn("Name: Paul", message_contents)
+        self.assertIn("Yes/ no: Correct", message_contents)
+        self.assertIn("Yes/ no radio without display value: True", message_contents)
+        self.assertNotIn("My attachment field:", message_contents)
+        self.assertNotIn("foo", message_contents)
 
         response = self.submit_form(
             data={
@@ -914,10 +1317,10 @@ class TestMailSend(unittest.TestCase):
         if isinstance(msg, bytes) and bytes is not str:
             # Python 3 with Products.MailHost 4.10+
             msg = msg.decode("utf-8")
-        self.assertIn("<strong>Yes/ no:</strong> Incorrect", msg)
-        self.assertIn(
-            "<strong>Yes/ no radio without display value:</strong> False", msg
-        )
+        message_contents = _get_text_from_message(msg)
+
+        self.assertIn("Yes/ no: Incorrect", message_contents)
+        self.assertIn("Yes/ no radio without display value: False", message_contents)
 
     def test_send_custom_field_id(self):
         """Custom field IDs should still appear as their friendly names in the email"""
@@ -926,9 +1329,21 @@ class TestMailSend(unittest.TestCase):
                 "@type": "form",
                 "send": True,
                 "internal_mapped_name": "renamed-internal_mapped_name",
+                "000000001": "submit_and_map_with_custom_field_id",
+                "000000002": "submit_and_map_with_original_field_id",
                 "subblocks": [
                     {
-                        "field_id": "internal_mapped_name",
+                        "field_id": "message",
+                        "label": "Message",
+                        "value": "just want to say hi",
+                    },
+                    {
+                        "field_id": "000000001",
+                        "label": "Other name",
+                        "field_type": "text",
+                    },
+                    {
+                        "field_id": "000000002",
                         "label": "Name with internal mapping",
                         "field_type": "text",
                     },
@@ -938,14 +1353,18 @@ class TestMailSend(unittest.TestCase):
         transaction.commit()
 
         form_data = [
-            {"label": "Name", "value": "John"},
+            {
+                "label": "Name",
+                "value": "John",
+                "field_id": "message",
+            },
             {
                 "label": "Other name",
                 "value": "Test",
-                "custom_field_id": "My custom field id",
+                "custom_field_id": "submit_and_map_with_custom_field_id",
             },
             {
-                "field_id": "internal_mapped_name",
+                "field_id": "000000002",
                 "value": "Test",
             },
         ]
@@ -959,14 +1378,13 @@ class TestMailSend(unittest.TestCase):
             },
         )
         transaction.commit()
-        self.assertEqual(response.status_code, 204)
+        self.assertEqual(response.status_code, 200)
         msg = self.mailhost.messages[0]
         if isinstance(msg, bytes) and bytes is not str:
             # Python 3 with Products.MailHost 4.10+
             msg = msg.decode("utf-8")
 
-        parsed_msgs = Parser().parse(StringIO(msg))
-        body = parsed_msgs.get_payload()
+        body = _get_text_from_message(msg)
 
         self.assertIn("Name", body)
         self.assertIn("John", body)
@@ -974,6 +1392,61 @@ class TestMailSend(unittest.TestCase):
         self.assertIn("Other name", body)
         self.assertIn("Test", body)
         self.assertIn("Name with internal mapping", body)
+
+    def test_send_date(
+        self,
+    ):
+        self.document.blocks = {
+            "form-id": {
+                "@type": "form",
+                "send": True,
+                "email_format": "list",
+                "subblocks": [
+                    {
+                        "field_id": "date_field_simple",
+                        "field_type": "date",
+                    },
+                    {
+                        "field_id": "date_field_iso",
+                        "field_type": "date",
+                    },
+                ],
+            },
+        }
+        transaction.commit()
+
+        response = self.submit_form(
+            data={
+                "from": "john@doe.com",
+                "data": [
+                    {
+                        "field_id": "date_field_simple",
+                        "label": "Simple date",
+                        "value": "2024-09-16",
+                    },
+                    {
+                        "field_id": "date_field_iso",
+                        "label": "ISO date",
+                        "value": "2024-09-16T16:20:00Z",
+                    },
+                ],
+                "subject": "test subject",
+                "block_id": "form-id",
+            },
+        )
+        transaction.commit()
+        self.assertEqual(response.status_code, 200)
+        msg = self.mailhost.messages[0]
+        if isinstance(msg, bytes) and bytes is not str:
+            # Python 3 with Products.MailHost 4.10+
+            msg = msg.decode("utf-8")
+        msg = re.sub(r"\s+", " ", msg)
+        self.assertIn("Subject: test subject", msg)
+        self.assertIn("From: john@doe.com", msg)
+        self.assertIn("To: site_addr@plone.com", msg)
+        self.assertIn("Reply-To: john@doe.com", msg)
+        self.assertIn("<strong>Simple date:</strong> Sep 16, 2024", msg)
+        self.assertIn("<strong>ISO date:</strong> Sep 16, 2024", msg)
 
     def test_send_xml(self):
         self.document.blocks = {
@@ -1004,9 +1477,9 @@ class TestMailSend(unittest.TestCase):
         transaction.commit()
 
         form_data = [
-            {"label": "Message", "value": "just want to say hi"},
-            {"label": "Name", "value": "John"},
-            {"label": "Name", "value": "Test"},
+            {"field_id": "message", "label": "Message", "value": "just want to say hi"},
+            {"field_id": "name", "label": "Name", "value": "John"},
+            {"field_id": "name", "label": "Name", "value": "Test"},
         ]
 
         response = self.submit_form(
@@ -1018,20 +1491,275 @@ class TestMailSend(unittest.TestCase):
             },
         )
         transaction.commit()
-        self.assertEqual(response.status_code, 204)
+        self.assertEqual(response.status_code, 200)
         msg = self.mailhost.messages[0]
         if isinstance(msg, bytes) and bytes is not str:
             # Python 3 with Products.MailHost 4.10+
             msg = msg.decode("utf-8")
 
-        parsed_msgs = Parser().parse(StringIO(msg))
+        parsed_msgs = Parser().parsestr(msg)
         # 1st index is the XML attachment
         msg_contents = parsed_msgs.get_payload()[1].get_payload(decode=True)
+
         xml_tree = ET.fromstring(msg_contents)
         for index, field in enumerate(xml_tree):
             custom_field_id = form_data[index].get("custom_field_id")
             self.assertEqual(
                 field.get("name"),
-                custom_field_id if custom_field_id else form_data[index]["label"],
+                custom_field_id if custom_field_id else form_data[index]["field_id"],
             )
             self.assertEqual(field.text, form_data[index]["value"])
+
+    def test_submit_return_400_if_malformed_email_in_email_field(self):
+        """
+        email fields in frontend are set as "from" field_type
+        """
+        self.document.blocks = {
+            "text-id": {"@type": "text"},
+            "form-id": {
+                "@type": "form",
+                "default_subject": "block subject",
+                "default_from": "john@doe.com",
+                "send": ["recipient"],
+                "subblocks": [
+                    {
+                        "field_id": "contact",
+                        "field_type": "from",
+                    },
+                    {
+                        "field_id": "message",
+                        "field_type": "text",
+                    },
+                    {
+                        "field_id": "name",
+                        "field_type": "text",
+                    },
+                ],
+            },
+        }
+        transaction.commit()
+
+        response = self.submit_form(
+            data={
+                "data": [
+                    {
+                        "field_id": "message",
+                        "label": "Message",
+                        "value": "just want to say hi",
+                    },
+                    {"field_id": "name", "label": "Name", "value": "Smith"},
+                    {"field_id": "contact", "label": "Email", "value": "foo"},
+                ],
+                "block_id": "form-id",
+            },
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(
+            response.json()["message"], 'Email not valid in "Email" field.'
+        )
+
+        response = self.submit_form(
+            data={
+                "data": [
+                    {
+                        "field_id": "message",
+                        "label": "Message",
+                        "value": "just want to say hi",
+                    },
+                    {"field_id": "name", "label": "Name", "value": "Smith"},
+                    {"field_id": "contact", "label": "Email", "value": "foo@"},
+                ],
+                "block_id": "form-id",
+            },
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(
+            response.json()["message"], 'Email not valid in "Email" field.'
+        )
+
+        response = self.submit_form(
+            data={
+                "data": [
+                    {
+                        "field_id": "message",
+                        "label": "Message",
+                        "value": "just want to say hi",
+                    },
+                    {"field_id": "name", "label": "Name", "value": "Smith"},
+                    {"field_id": "contact", "label": "Email", "value": "foo@asd"},
+                ],
+                "block_id": "form-id",
+            },
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(
+            response.json()["message"], 'Email not valid in "Email" field.'
+        )
+
+    def test_submit_return_200_if_correct_email_in_email_field(self):
+        """
+        email fields in frontend are set as "from" field_type
+        """
+        self.document.blocks = {
+            "text-id": {"@type": "text"},
+            "form-id": {
+                "@type": "form",
+                "default_subject": "block subject",
+                "default_from": "john@doe.com",
+                "send": ["recipient"],
+                "subblocks": [
+                    {
+                        "field_id": "contact",
+                        "field_type": "from",
+                    },
+                    {
+                        "field_id": "message",
+                        "field_type": "text",
+                    },
+                    {
+                        "field_id": "name",
+                        "field_type": "text",
+                    },
+                ],
+            },
+        }
+        transaction.commit()
+
+        response = self.submit_form(
+            data={
+                "data": [
+                    {
+                        "field_id": "message",
+                        "label": "Message",
+                        "value": "just want to say hi",
+                    },
+                    {"field_id": "name", "label": "Name", "value": "Smith"},
+                    {"field_id": "contact", "label": "Email", "value": "foo@plone.org"},
+                ],
+                "block_id": "form-id",
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+
+    def test_submit_return_200_with_submitted_data(self):
+        """
+        This is needed for confirm message
+        """
+        self.document.blocks = {
+            "form-id": {
+                "@type": "form",
+                "send": ["recipient"],
+                "subblocks": [
+                    {
+                        "field_id": "message",
+                        "field_type": "text",
+                    },
+                    {
+                        "field_id": "name",
+                        "field_type": "text",
+                    },
+                ],
+            },
+        }
+        transaction.commit()
+
+        response = self.submit_form(
+            data={
+                "from": "john@doe.com",
+                "data": [
+                    {
+                        "field_id": "message",
+                        "label": "Message",
+                        "value": "just want to say hi",
+                    },
+                    {"field_id": "name", "label": "Name", "value": "John"},
+                ],
+                "subject": "test subject",
+                "block_id": "form-id",
+            },
+        )
+        transaction.commit()
+        self.assertEqual(response.status_code, 200)
+        msg = self.mailhost.messages[0]
+        if isinstance(msg, bytes) and bytes is not str:
+            # Python 3 with Products.MailHost 4.10+
+            msg = msg.decode("utf-8")
+        msg = re.sub(r"\s+", " ", msg)
+        self.assertIn("Subject: test subject", msg)
+        self.assertIn("From: john@doe.com", msg)
+        self.assertIn("To: site_addr@plone.com", msg)
+        self.assertIn("Reply-To: john@doe.com", msg)
+        self.assertIn("<strong>Message:</strong> just want to say hi", msg)
+        self.assertIn("<strong>Name:</strong> John", msg)
+
+    def test_cleanup_html_in_submitted_data(self):
+        """
+        This is needed for confirm message
+        """
+        self.document.blocks = {
+            "form-id": {
+                "@type": "form",
+                "send": ["recipient"],
+                "subblocks": [
+                    {
+                        "field_id": "message",
+                        "field_type": "text",
+                    },
+                    {
+                        "field_id": "name",
+                        "field_type": "text",
+                    },
+                ],
+            },
+        }
+        transaction.commit()
+
+        response = self.submit_form(
+            data={
+                "from": "john@doe.com",
+                "data": [
+                    {
+                        "field_id": "message",
+                        "label": "Message",
+                        "value": "<b onmouseover=\"alert('XSS testing!')\">click here</b><p><i>keep tags</i></p>",
+                    },
+                    {
+                        "field_id": "name",
+                        "label": "Name",
+                        "value": "<script>alert(‘XSS’)</script> foo",
+                    },
+                ],
+                "subject": "test subject",
+                "block_id": "form-id",
+            },
+        )
+        transaction.commit()
+        self.assertEqual(response.status_code, 200)
+        res = response.json()
+        self.assertEqual(
+            res,
+            {
+                "data": [
+                    {
+                        "field_id": "message",
+                        "label": "Message",
+                        "value": "click here keep tags",
+                    },
+                    {
+                        "field_id": "name",
+                        "label": "Name",
+                        "value": "alert(‘XSS’)  foo",
+                    },
+                ]
+            },
+        )
+        msg = self.mailhost.messages[0]
+        if isinstance(msg, bytes) and bytes is not str:
+            # Python 3 with Products.MailHost 4.10+
+            msg = msg.decode("utf-8")
+        msg = re.sub(r"\s+", " ", msg)
+        self.assertIn(
+            "<strong>Message:</strong> click here keep tags",
+            msg,
+        )
+        self.assertIn("<strong>Name:</strong> alert(=E2=80=98XSS=E2=80=99) foo", msg)

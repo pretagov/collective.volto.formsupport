@@ -1,10 +1,13 @@
-import re
-from typing import Any
-
+from collective.volto.formsupport import _
 from collective.volto.formsupport.validation import getValidations
+from plone import api
+from plone.schema.email import _isemail
+from zExceptions import BadRequest
+from typing import Any
+import re
+from zope.i18n import translate
 
 validation_message_matcher = re.compile("Validation failed\(([^\)]+)\): ")
-
 
 def always():
     return True
@@ -85,7 +88,7 @@ class Field:
     def send_in_email(self):
         return True
 
-    def validate(self):
+    def validate(self, request):
         # Making sure we've got a validation that actually exists.
         if not self._value and not self.required:
             return
@@ -120,10 +123,10 @@ class YesNoField(Field):
     @property
     def display_value(self):
         if not self._display_value_mapping:
-            return self._value
-        if self._value is True:
+            return self.internal_value
+        if self.internal_value is True:
             return self._display_value_mapping.get("yes")
-        elif self._value is False:
+        elif self.internal_value is False:
             return self._display_value_mapping.get("no")
 
 
@@ -133,11 +136,39 @@ class AttachmentField(Field):
         return False
 
 
+class EmailField(Field):
+    def validate(self, request):
+        super().validate(request=request)
+
+        if _isemail(self.internal_value) is None:
+            raise BadRequest(
+                translate(
+                    _(
+                        "wrong_email",
+                        default='Email not valid in "${field}" field.',
+                        mapping={
+                            "field": self.label,
+                        },
+                    ),
+                    context=request,
+                )
+            )
+
+
+class DateField(Field):
+    def display_value(self):
+        return api.portal.get_localized_time(self.internal_value)
+
+
 def construct_field(field_data):
     if field_data.get("widget") == "single_choice":
         return YesNoField(field_data)
     elif field_data.get("field_type") == "attachment":
         return AttachmentField(field_data)
+    elif field_data.get("field_type") in ["from", "email"]:
+        return EmailField(field_data)
+    elif field_data.get("field_type") == "date":
+        return DateField(field_data)
 
     return Field(field_data)
 
