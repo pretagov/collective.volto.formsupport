@@ -66,7 +66,6 @@ class SubmitPost(Service):
             self.block = self.get_block_data(block_id=self.block_id)
 
     def reply(self):
-        breakpoint()
         store_action = self.block.get("store", False)
         send_action = self.block.get("send", [])
 
@@ -186,7 +185,6 @@ class SubmitPost(Service):
         return subject
 
     def send_data(self):
-        breakpoint()
         subject = self.get_subject()
 
         mfrom = self.form_data.get("from", "") or self.block.get("default_from", "")
