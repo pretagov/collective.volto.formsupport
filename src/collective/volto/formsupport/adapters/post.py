@@ -51,6 +51,8 @@ class PostAdapter:
 
         filtered_fields = self.filter_parameters()
 
+        breakpoint()
+
         errors = {}
         for field in filtered_fields:
             show_when = field.show_when_when
@@ -283,6 +285,7 @@ class PostAdapter:
 
     def format_fields(self):
         fields_data = []
+        breakpoint()
         for submitted_field in self.form_data.get("data", []):
             # TODO: Review if fields submitted without a field_id should be included. Is breaking change if we remove it
             if submitted_field.get("field_id") is None:
@@ -327,4 +330,5 @@ class PostAdapter:
                     "validations": validations_for_field,
                 }
             )
+        breakpoint()
         return construct_fields(fields_data)
