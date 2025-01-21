@@ -51,8 +51,6 @@ class PostAdapter:
 
         filtered_fields = self.filter_parameters()
 
-        breakpoint()
-
         errors = {}
         for field in filtered_fields:
             show_when = field.show_when_when
