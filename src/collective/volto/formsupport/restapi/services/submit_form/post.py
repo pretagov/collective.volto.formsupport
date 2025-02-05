@@ -73,6 +73,8 @@ class SubmitPost(Service):
 
         notify(PostEventService(self.context, self.form_data))
 
+        breakpoint()
+
         if send_action or self.get_bcc():
             try:
                 self.send_data()

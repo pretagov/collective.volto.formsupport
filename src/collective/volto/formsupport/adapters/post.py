@@ -102,6 +102,7 @@ class PostAdapter:
         return self.form_data
 
     def extract_data_from_request(self):
+        breakpoint()
         form_data = json_body(self.request)
 
         fixed_fields = []
@@ -133,6 +134,7 @@ class PostAdapter:
         return form_data
 
     def get_block_data(self, block_id, global_form_id):
+        breakpoint()
         blocks = get_blocks(self.context)
         if not blocks:
             global_form_id = global_form_id
@@ -291,6 +293,7 @@ class PostAdapter:
         """
         do not send attachments fields.
         """
+        breakpoint()
         fields = [field for field in self.format_fields() if field.send_in_email]
 
         additionalInfo = self.block.get('sendAdditionalInfo', [])
