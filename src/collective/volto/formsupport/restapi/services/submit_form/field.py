@@ -59,6 +59,8 @@ class Field:
     def display_value(self):
         if self._display_value_mapping:
             return self._display_value_mapping.get(self._value, self._value)
+        if isinstance(self._value, list):
+            return  ", ".join(self._value)
         return self._value
 
     @property
@@ -139,8 +141,9 @@ class AttachmentField(Field):
 class EmailField(Field):
     def validate(self, request):
         super().validate(request=request)
-
-        if _isemail(self.internal_value) is None:
+        if not self.internal_value:
+            return
+        if not _isemail(self.internal_value or ''):
             raise BadRequest(
                 translate(
                     _(
@@ -157,7 +160,7 @@ class EmailField(Field):
 
 class DateField(Field):
     def display_value(self):
-        return api.portal.get_localized_time(self.internal_value)
+        return api.portal.get_localized_time(self.internal_value or '')
 
 class TimeField(Field):
     def display_value(self):
