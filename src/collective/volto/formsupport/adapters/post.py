@@ -335,27 +335,36 @@ class PostAdapter:
             #                 "custom_field_id": self.block.get(field["field_id"]),
             #             }
             #         )
-            validations_for_field = {}
+
+            matching_field = None
             for field in self.block.get("subblocks", []):
-                validation_ids_to_apply = field.get("validations", [])
-                for validation_and_setting_id, setting_value in field.get(
-                    "validationSettings", {}
-                ).items():
-                    split_validation_and_setting_ids = validation_and_setting_id.split("-")
-                    if len(split_validation_and_setting_ids) < 2:
-                        continue
-                    validation_id, setting_id = split_validation_and_setting_ids
-                    if validation_id not in validation_ids_to_apply:
-                        continue
-                    if validation_id not in validations_for_field:
-                        validations_for_field[validation_id] = {}
-                    validations_for_field[validation_id][setting_id] = setting_value
+                if field.get("id", field.get("field_id")) == submitted_field.get("field_id"):
+                    matching_field = field
+                    break
+
+            if matching_field is None:
+                continue
+
+            validations_for_field = {}
+            validation_ids_to_apply = matching_field.get("validations", [])
+            for validation_and_setting_id, setting_value in matching_field.get(
+                "validationSettings", {}
+            ).items():
+                split_validation_and_setting_ids = validation_and_setting_id.split("-")
+                if len(split_validation_and_setting_ids) < 2:
+                    continue
+                validation_id, setting_id = split_validation_and_setting_ids
+                if validation_id not in validation_ids_to_apply:
+                    continue
+                if validation_id not in validations_for_field:
+                    validations_for_field[validation_id] = {}
+                validations_for_field[validation_id][setting_id] = setting_value
             fields_data.append(
                 {
-                    **field,
+                    **matching_field,
                     **submitted_field,
                     "id": submitted_field["field_id"],  # Ensure we always use the submitted field id
-                    "display_value_mapping": field.get("display_values"),
+                    "display_value_mapping": matching_field.get("display_values"),
                     "custom_field_id": self.block.get(submitted_field["field_id"]),
                     # We're straying from how validations are serialized and deserialized here to make our lives easier.
                     #   Let's use a dictionary of {'validation_id': {'setting_id': 'setting_value'}} when working inside fields for simplicity.

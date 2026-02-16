@@ -4,18 +4,6 @@
     >
 
   <subscriber
-      factory="collective.volto.formsupport.restapi.deserializer.FormBlockDeserializer"
-      provides="plone.restapi.interfaces.IBlockFieldDeserializationTransformer"
-      />
-  <subscriber
-      factory="collective.volto.formsupport.restapi.deserializer.FormBlockDeserializerRoot"
-      provides="plone.restapi.interfaces.IBlockFieldDeserializationTransformer"
-      />
-
-  <!-- =======
-    > -->
-
-  <subscriber
       factory=".blocks.FormBlockDeserializer"
       provides="plone.restapi.interfaces.IBlockFieldDeserializationTransformer"
       />
@@ -23,5 +11,5 @@
       factory=".blocks.FormBlockDeserializerRoot"
       provides="plone.restapi.interfaces.IBlockFieldDeserializationTransformer"
       />
-  <!-- >>>>>>> custom-label-mapping -->
+
 </configure>
