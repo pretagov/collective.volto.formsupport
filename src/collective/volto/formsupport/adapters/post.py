@@ -1,6 +1,7 @@
 from collective.volto.formsupport import _
 from collective.volto.formsupport.interfaces import ICaptchaSupport
 from collective.volto.formsupport.interfaces import IPostAdapter
+from collective.volto.formsupport.restapi import GLOBAL_FORM_REGISTRY_RECORD_ID
 from collective.volto.formsupport.restapi.services.submit_form.field import (
     construct_field,
     construct_fields,
@@ -22,13 +23,7 @@ import os
 from datetime import datetime
 from urllib.parse import urlparse
 
-from plone.restapi.deserializer import json_body
 from plone.restapi.serializer.converters import json_compatible
-
-
-GLOBAL_FORM_REGISTRY_RECORD_ID = (
-    "collective.volto.formsupport.interfaces.IGlobalFormStore.global_forms_config"
-)
 
 
 @implementer(IPostAdapter)
