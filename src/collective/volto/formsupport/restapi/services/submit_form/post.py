@@ -50,8 +50,6 @@ class PostEventService:
 
 
 class SubmitPost(Service):
-    fields = []
-
     def __init__(self, context, request):
         super().__init__(context, request)
 
@@ -59,12 +57,35 @@ class SubmitPost(Service):
         self.form_data_adapter = getMultiAdapter(
             (self.context, self.request), IPostAdapter
         )
-        # We've already done all the work to get this data, let's reuse it.
+        # The adapter's `form_data` attribute is the RAW request body, set in its
+        # __init__. The checked data is what calling the adapter returns — see
+        # reply(), which does that before acting on any of it.
         self.form_data = self.form_data_adapter.form_data
         self.block_id = self.form_data_adapter.block_id
         self.block = self.form_data_adapter.block
 
     def reply(self):
+        # Everything this service does to a submission — emailing it, storing
+        # it, announcing it to subscribers — happens only after the adapter has
+        # checked it. Calling the adapter is what runs `validate_form` (the
+        # block lookup, the "send or store" requirement, empty data, the
+        # attachment limits, the CAPTCHA and the bcc addresses) and then every
+        # field's own `validations`.
+        #
+        # Reading `form_data_adapter.form_data` instead of calling the adapter
+        # skips all of it: that attribute is just the parsed request body. None
+        # of those checks are wired anywhere else, so bypassing __call__ meant a
+        # submission was emailed and stored with its CAPTCHA unverified.
+        #
+        # Field validation answers 400 with a body rather than raising, so that
+        # the frontend can show each message against the field it belongs to.
+        # Everything in `validate_form` raises BadRequest instead, and
+        # plone.restapi turns that into the 400 itself.
+        checked = self.form_data_adapter()
+        if self.request.response.getStatus() == 400:
+            return checked
+        self.form_data = checked
+
         store_action = self.block.get("store", False)
         send_action = self.block.get("send", [])
 
@@ -98,6 +119,9 @@ class SubmitPost(Service):
         return {"data": self.form_data.get("data", [])}
 
     def get_form_data(self):
+        # Upstream's name for "run the adapter"; reply() calls the adapter
+        # directly so it can propagate the 400 body, and this is kept because
+        # subclasses and the tests use it.
         return self.form_data_adapter()
 
     def get_reply_to(self):
