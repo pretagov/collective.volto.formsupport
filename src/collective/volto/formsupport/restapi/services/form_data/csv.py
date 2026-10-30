@@ -109,13 +109,10 @@ class FormDataExportGet(Service):
         self.request.response.write(data)
 
     def get_fields_labels(self):
-        # Keyed as the records are stored (see form_fields_order above); the
-        # header text is the custom id where there is one, which is the name an
-        # external system reading this CSV expects.
+        # Keyed as the records are stored (see form_fields_order above), and
+        # labelled as this fork labels them: the human label.
         return {
-            x.get("custom_field_id") or x["field_id"]: (
-                x.get("custom_field_id") or x.get("label", x["field_id"])
-            )
+            x.get("custom_field_id") or x["field_id"]: x.get("label", x["field_id"])
             for x in self.get_form_fields()
             if x.get("field_type", "") != "static_text"
         }

@@ -95,10 +95,11 @@ class FormDataStore:
             custom_field_id = field.get("custom_field_id")
             field_id = custom_field_id if custom_field_id else field["field_id"]
             fields[field_id] = {
-                # The custom id is the field's name OUTSIDE the system, which is
-                # what upstream puts in the CSV header and the emailed XML, so it
-                # wins over the human label when one is set.
-                "label": custom_field_id or field.get("label", field_id),
+                # The human label, as this fork has always shown in the CSV
+                # header. Upstream puts the custom id there instead; that is a
+                # display choice, separate from the KEY above, and changing it
+                # is not this upgrade's business.
+                "label": field.get("label", field_id),
                 "type": field.get("field_type", "text"),
             }
 
