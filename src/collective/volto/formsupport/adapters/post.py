@@ -9,7 +9,6 @@ from collective.volto.otp.utils import validate_email_token
 from copy import deepcopy
 from plone import api
 from plone.restapi.deserializer import json_body
-from plone.schema.email import _isemail
 from zExceptions import BadRequest
 from zope.component import adapter
 from zope.component import getMultiAdapter
@@ -148,41 +147,7 @@ class PostAdapter:
                 name=self.block["captcha"],
             ).verify(self.form_data.get("captcha"))
 
-        # Restored from upstream, call site and all, and BEFORE validate_bcc as
-        # upstream orders them: a bcc address is taken from an email field, so
-        # validating the fields afterwards let an invalid one reach the bcc
-        # path first. This fork dropped both inside a large refactor (Form Add
-        # Event, #73) with no note saying why, while upstream still ships it
-        # and fixed it in 3.3.3 (an empty email field no longer raises). It
-        # does not collide with this fork's validators: a `from` field is
-        # checked here regardless, and `isEmail` stays an opt-in rule an author
-        # can add to a text field.
-        self.validate_email_fields()
         self.validate_bcc()
-
-    def validate_email_fields(self):
-        email_fields = [
-            x.get("field_id", "")
-            for x in self.block.get("subblocks", [])
-            if x.get("field_type", "") == "from"
-        ]
-        for form_field in self.form_data.get("data", []):
-            if form_field.get("field_id", "") not in email_fields:
-                continue
-            value = form_field.get("value", "")
-            if value and not _isemail(value):
-                raise BadRequest(
-                    translate(
-                        _(
-                            "wrong_email",
-                            default='Email not valid in "${field}" field.',
-                            mapping={
-                                "field": form_field.get("label", ""),
-                            },
-                        ),
-                        context=self.request,
-                    )
-                )
 
     def validate_bcc(self):
         """

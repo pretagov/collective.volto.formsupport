@@ -1916,4 +1916,14 @@ class TestMailSend(unittest.TestCase):
         transaction.commit()
         self.assertEqual(response.status_code, 400)
         res = response.json()
-        self.assertEqual(res["message"], 'Email not valid in "email" field.')
+        # The guarantee upstream asserts -- a malformed address in a `from`
+        # field is refused -- in the shape this fork answers with. Upstream
+        # raises one flat `message` for the whole submission; this fork reports
+        # per-field errors, keyed by field_id, so a frontend can put each one
+        # against the input it belongs to. Same rule, better answer, and
+        # test_submit_return_400_if_malformed_email_in_email_field covers it
+        # from the fork's own side.
+        self.assertEqual(
+            res["error"]["errors"]["email"],
+            {"validation": 'Email not valid in "email" field.'},
+        )
