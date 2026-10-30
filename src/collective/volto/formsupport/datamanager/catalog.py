@@ -81,24 +81,11 @@ class FormDataStore:
                 )
             )
             return None
-        # Keyed by `custom_field_id` where a field carries one: that is this
-        # fork's behaviour and the legacy forms depend on it. Upstream 3.3.x
-        # keys by `field_id` and uses custom_field_id as the LABEL instead --
-        # taking that wholesale would re-key every stored record.
-        #
-        # The VALUE takes upstream's shape, because the loop below now reads
-        # `field["type"]` and `field["label"]`: 3.3.x added `fields_types` and
-        # `storedValue(value, field["type"])`, where this fork stored a bare
-        # label string. Keeping the string would raise on the first submission.
         fields = {}
         for field in form_fields:
             custom_field_id = field.get("custom_field_id")
             field_id = custom_field_id if custom_field_id else field["field_id"]
             fields[field_id] = {
-                # The human label, as this fork has always shown in the CSV
-                # header. Upstream puts the custom id there instead; that is a
-                # display choice, separate from the KEY above, and changing it
-                # is not this upgrade's business.
                 "label": field.get("label", field_id),
                 "type": field.get("field_type", "text"),
             }

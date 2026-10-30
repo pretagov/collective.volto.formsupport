@@ -237,10 +237,6 @@ class PostAdapter:
         return [field for field in self.format_fields() if field.send_in_email]
 
     def format_fields(self):
-        # This fork's own pipeline, kept over upstream's formatter: it covers
-        # what upstream does here -- a list value joined with ', ' and a date
-        # run through api.portal.get_localized_time (field.py's DateField) --
-        # and adds display-value mapping and custom_field_id on top.
         fields_data = []
         for submitted_field in self.form_data.get("data", []):
             # TODO: Review if fields submitted without a field_id should be included. Is breaking change if we remove it
