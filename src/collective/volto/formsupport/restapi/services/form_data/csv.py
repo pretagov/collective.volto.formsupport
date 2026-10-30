@@ -34,7 +34,14 @@ class FormDataExportGet(Service):
 
         if self.form_block:
             for field in self.form_block.get("subblocks", []):
-                field_id = field["field_id"]
+                # The key a record is STORED under: the custom id where the form
+                # block carries one for this field, else the field's own id. The
+                # raw field_id is not stable -- delete a field and add it back
+                # and it is a new one -- so ordering by it would read every
+                # earlier submission as a legacy column and the CSV would grow a
+                # second column for what an author sees as one field.
+                custom_field_id = self.form_block.get(field["field_id"])
+                field_id = custom_field_id or field["field_id"]
                 self.form_fields_order.append(field_id)
 
     def get_form_fields(self):
@@ -94,8 +101,13 @@ class FormDataExportGet(Service):
         self.request.response.write(data)
 
     def get_fields_labels(self):
+        # Keyed as the records are stored (see form_fields_order above); the
+        # header text is the custom id where there is one, which is the name an
+        # external system reading this CSV expects.
         return {
-            x["field_id"]: x.get("custom_field_id", x.get("label", x["field_id"]))
+            x.get("custom_field_id") or x["field_id"]: (
+                x.get("custom_field_id") or x.get("label", x["field_id"])
+            )
             for x in self.get_form_fields()
             if x.get("field_type", "") != "static_text"
         }

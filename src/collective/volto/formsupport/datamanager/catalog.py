@@ -95,7 +95,10 @@ class FormDataStore:
             custom_field_id = field.get("custom_field_id")
             field_id = custom_field_id if custom_field_id else field["field_id"]
             fields[field_id] = {
-                "label": field.get("label", field_id),
+                # The custom id is the field's name OUTSIDE the system, which is
+                # what upstream puts in the CSV header and the emailed XML, so it
+                # wins over the human label when one is set.
+                "label": custom_field_id or field.get("label", field_id),
                 "type": field.get("field_type", "text"),
             }
 
