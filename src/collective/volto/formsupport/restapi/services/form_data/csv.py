@@ -40,7 +40,15 @@ class FormDataExportGet(Service):
                 # and it is a new one -- so ordering by it would read every
                 # earlier submission as a legacy column and the CSV would grow a
                 # second column for what an author sees as one field.
-                custom_field_id = self.form_block.get(field["field_id"])
+                # Two spellings reach this. A question edited in the sidebar
+                # carries `custom_field_id` on itself, which is where
+                # submit_form/field.py reads it and where a frontend can offer
+                # it to an author. A legacy form instead carries one key per
+                # question on the BLOCK, named after the question's id -- the
+                # old editor's "Data ID mapping". Both mean the same thing.
+                custom_field_id = field.get("custom_field_id") or self.form_block.get(
+                    field["field_id"]
+                )
                 field_id = custom_field_id or field["field_id"]
                 self.form_fields_order.append(field_id)
 
