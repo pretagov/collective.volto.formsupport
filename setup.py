@@ -15,7 +15,7 @@ long_description = "\n\n".join(
 
 setup(
     name="collective.volto.formsupport",
-    version="3.2.2",
+    version="3.3.3",
     description="Add support for customizable forms in Volto",
     long_description=long_description,
     # Get more from https://pypi.org/classifiers/
@@ -27,11 +27,11 @@ setup(
         "Framework :: Plone :: 5.2",
         "Framework :: Plone :: 6.0",
         "Programming Language :: Python",
-        "Programming Language :: Python :: 3.7",
         "Programming Language :: Python :: 3.8",
         "Programming Language :: Python :: 3.9",
         "Programming Language :: Python :: 3.10",
         "Programming Language :: Python :: 3.11",
+        "Programming Language :: Python :: 3.12",
         "Operating System :: OS Independent",
         "License :: OSI Approved :: GNU General Public License v2 (GPLv2)",
     ],
@@ -50,7 +50,7 @@ setup(
     package_dir={"": "src"},
     include_package_data=True,
     zip_safe=False,
-    python_requires=">=3.7",
+    python_requires=">=3.8",
     install_requires=[
         "setuptools",
         "z3c.jbot",
@@ -59,6 +59,7 @@ setup(
         "plone.dexterity",
         "plone.i18n",
         "plone.memoize",
+        "plone.namedfile",
         "plone.protect",
         "plone.registry",
         "plone.restapi>=8.36.0",
@@ -72,7 +73,7 @@ setup(
     ],
     extras_require={
         "hcaptcha": [
-            "plone.formwidget.hcaptcha>=1.0.1",
+            "plone.formwidget.hcaptcha>=1.0.3",
         ],
         "recaptcha": [
             "plone.formwidget.recaptcha",
@@ -106,7 +107,6 @@ setup(
             "plone.formwidget.hcaptcha",
             "plone.formwidget.recaptcha",
             "collective.z3cform.norobots",
-            "collective.honeypot",
             "collective.volto.otp",
         ],
     },

@@ -16,6 +16,7 @@ from zope.i18n import translate
 from zope.interface import implementer
 from zope.interface import Interface
 
+import base64
 import math
 import os
 
@@ -127,7 +128,7 @@ class PostAdapter:
                 )
             )
 
-        if not self.form_data.get("data", []):
+        if not self.form_data.get("data", []) and not self.form_data.get("attachments"):
             raise BadRequest(
                 translate(
                     _(
@@ -147,6 +148,36 @@ class PostAdapter:
             ).verify(self.form_data.get("captcha"))
 
         self.validate_bcc()
+
+        # Restored from upstream. This fork dropped it inside a large refactor
+        # (Form Add Event, #73) with no note saying why, while upstream still
+        # ships it and fixed it in 3.3.3 (an empty email field no longer
+        # raises). It does not collide with this fork's validators: a `from`
+        # field is checked here regardless, and `isEmail` remains an opt-in
+        # rule an author can add to a text field.
+    def validate_email_fields(self):
+        email_fields = [
+            x.get("field_id", "")
+            for x in self.block.get("subblocks", [])
+            if x.get("field_type", "") == "from"
+        ]
+        for form_field in self.form_data.get("data", []):
+            if form_field.get("field_id", "") not in email_fields:
+                continue
+            value = form_field.get("value", "")
+            if value and not _isemail(value):
+                raise BadRequest(
+                    translate(
+                        _(
+                            "wrong_email",
+                            default='Email not valid in "${field}" field.',
+                            mapping={
+                                "field": form_field.get("label", ""),
+                            },
+                        ),
+                        context=self.request,
+                    )
+                )
 
     def validate_bcc(self):
         """
@@ -192,14 +223,21 @@ class PostAdapter:
                 )
 
     def validate_attachments(self):
+        """
+        * validate attachments size (total size of all attachments must be less
+          than FORM_ATTACHMENTS_LIMIT)
+        """
         attachments_limit = os.environ.get("FORM_ATTACHMENTS_LIMIT", "")
         if not attachments_limit:
             return
         attachments = self.form_data.get("attachments", {})
         attachments_len = 0
-        for attachment in attachments.values():
-            data = attachment.get("data", "")
-            attachments_len += (len(data) * 3) / 4 - data.count("=", -2)
+        for value in attachments.values():
+            data = value.get("data", "")
+            if value.get("encoding") == "base64":
+                attachments_len += len(base64.b64decode(data))
+            else:
+                attachments_len += len(data)
         if attachments_len > float(attachments_limit) * pow(1024, 2):
             size_name = ("B", "KB", "MB", "GB", "TB", "PB", "EB", "ZB", "YB")
             i = int(math.floor(math.log(attachments_len, 1024)))
@@ -224,10 +262,15 @@ class PostAdapter:
     def filter_parameters(self):
         """
         do not send attachments fields.
+        Used for email message body, and xml attachment (?)
         """
         return [field for field in self.format_fields() if field.send_in_email]
 
     def format_fields(self):
+        # This fork's own pipeline, kept over upstream's formatter: it covers
+        # what upstream does here -- a list value joined with ', ' and a date
+        # run through api.portal.get_localized_time (field.py's DateField) --
+        # and adds display-value mapping and custom_field_id on top.
         fields_data = []
         for submitted_field in self.form_data.get("data", []):
             # TODO: Review if fields submitted without a field_id should be included. Is breaking change if we remove it

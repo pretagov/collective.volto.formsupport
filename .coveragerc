@@ -10,6 +10,7 @@ include =
     */src/collective/*
 omit =
     */test*
+    */upgrades*
     /home/*/.buildout/eggs/*
     /home/travis/buildout-cache/eggs/*
     /home/travis/virtualenv/*

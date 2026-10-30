@@ -1,6 +1,65 @@
 Changelog
 =========
 
+3.3.3 (2026-10-06)
+------------------
+
+- Fix README format file.
+  [macagua]
+
+- Do not break when an email field is an empty string in validate_email_fields. Required fields are already checked.
+  [cekk]
+- Added filtering by date from @form-data service. Added batching on results only if b_size e b_start are both passed in.
+  [daniele]
+
+3.3.2 (2025-12-11)
+------------------
+
+- Fix csv export: always insert fixed_columns as latest ones.
+  [cekk]
+
+
+3.3.1 (2025-11-17)
+------------------
+
+- Fix README file.
+  [macagua]
+
+- Updated Spanish translation.
+  [macagua]
+
+- Update hCaptcha integration to use the new submit signature without remoteip, aligning with plone.formwidget.hcaptcha privacy (GDPR/LGPD) change.
+  [alexandreIFB]
+
+- Update Brazilian Portuguese translation.
+  [@ericof]
+
+3.3.0 (2025-05-12)
+------------------
+- BREAKING CHANGE: these new features needs volto-form-block >= v3.13.0.
+  [mamico]
+- Save attachments as blobfile in the storage adapter, add a view to download them, returns
+  attachment info in the restapi @form-data endpoint.
+  [mamico]
+- Fix: if there are multiple forms on a page, each csv button downloads the record of all the forms,
+  now if there is a block_id parameter, the csv is filtered on that.
+  [mamico]
+- Subject templating
+  [folix-01]
+- Do not set values in __init__ in *SubmitPost* because the user there is not already set and can lead to problems.
+  [cekk]
+
+3.2.3 (2025-03-07)
+------------------
+
+- Now in the CSV export the obsolete records fields are ordered
+  alphabetically after the current form fields.
+  [folix-01]
+
+- Add current form columns to CSV export event if field are empty.
+  [folix-01]
+
+
 3.2.2 (2025-03-05)
 ------------------
 
@@ -18,8 +77,8 @@ Changelog
 3.2.0 (2024-11-15)
 ------------------
 
-- Added an adapter (`IDataAdapter`) to allow information to be added as a return value 
-  to the form-data expander. This allows addons that integrate information to be added 
+- Added an adapter (`IDataAdapter`) to allow information to be added as a return value
+  to the form-data expander. This allows addons that integrate information to be added
   rather than overwriting the expander each time.
   [mamico]
 

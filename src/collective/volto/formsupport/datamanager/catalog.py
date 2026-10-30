@@ -1,12 +1,15 @@
+from base64 import b64decode
 from collective.volto.formsupport import logger
 from collective.volto.formsupport.interfaces import IFormDataStore
 from collective.volto.formsupport.utils import get_blocks
 from copy import deepcopy
 from datetime import datetime
 from plone.dexterity.interfaces import IDexterityContent
+from plone.namedfile import NamedBlobFile
 from plone.restapi.deserializer import json_body
 from repoze.catalog.catalog import Catalog
 from repoze.catalog.indexes.field import CatalogFieldIndex
+from repoze.catalog.query import Eq
 from souper.interfaces import ICatalogFactory
 from souper.soup import get_soup
 from souper.soup import NodeAttributeIndexer
@@ -19,7 +22,7 @@ from zope.interface import Interface
 @implementer(ICatalogFactory)
 class FormDataSoupCatalogFactory:
     def __call__(self, context):
-        #  do not set any index here..maybe on each form
+        #  do not set any index here..maybe on each form
         catalog = Catalog()
         block_id_indexer = NodeAttributeIndexer("block_id")
         catalog["block_id"] = CatalogFieldIndex(block_id_indexer)
@@ -35,7 +38,8 @@ class FormDataStore:
 
     @property
     def soup(self):
-        return get_soup("form_data", self.context)
+        soup = get_soup("form_data", self.context)
+        return soup
 
     @property
     def block_id(self):
@@ -72,45 +76,120 @@ class FormDataStore:
         form_fields = self.get_form_fields()
         if not form_fields:
             logger.error(
-                'Block with id {} and type "form" not found in context: {}.'.format(
+                'Block with id {} and type "form" not found in context: {}.'.format(
                     self.block_id, self.context.absolute_url()
                 )
             )
             return None
+        # Keyed by `custom_field_id` where a field carries one: that is this
+        # fork's behaviour and the legacy forms depend on it. Upstream 3.3.x
+        # keys by `field_id` and uses custom_field_id as the LABEL instead --
+        # taking that wholesale would re-key every stored record.
+        #
+        # The VALUE takes upstream's shape, because the loop below now reads
+        # `field["type"]` and `field["label"]`: 3.3.x added `fields_types` and
+        # `storedValue(value, field["type"])`, where this fork stored a bare
+        # label string. Keeping the string would raise on the first submission.
         fields = {}
         for field in form_fields:
             custom_field_id = field.get("custom_field_id")
             field_id = custom_field_id if custom_field_id else field["field_id"]
-            fields[field_id] = field.get("label", field_id)
+            fields[field_id] = {
+                "label": field.get("label", field_id),
+                "type": field.get("field_type", "text"),
+            }
 
         record = Record()
         fields_labels = {}
         fields_order = []
+        fields_types = {}
         for field_data in data:
             field_id = field_data.field_id
             # TODO: not nice using the protected member to access the real internal value, but easiest way.
             value = field_data.internal_value
             if field_id in fields:
-                record.attrs[field_id] = value
-                fields_labels[field_id] = fields[field_id]
+                field = fields[field_id]
+                record.attrs[field_id] = self.storedValue(value, field["type"])
+                fields_types[field_id] = field.get("type", "")
+                fields_labels[field_id] = field["label"]
                 fields_order.append(field_id)
+            # else: skip the field
         record.attrs["fields_labels"] = fields_labels
         record.attrs["fields_order"] = fields_order
+        record.attrs["fields_types"] = fields_types
         record.attrs["date"] = datetime.now()
         record.attrs["block_id"] = self.block_id
         return self.soup.add(record)
 
-    def length(self):
+    def storedValue(self, value, type):
+        if type == "attachment":
+            if value:
+                if value.get("encoding") == "base64":
+                    data = b64decode(value["data"])
+                else:
+                    data = value["data"]
+                return NamedBlobFile(
+                    data=data,
+                    filename=value.get("filename"),
+                    contentType=value.get("content-type", "application/octet-stream"),
+                )
+        return value
+
+    def length(self, query=None):
         return len([x for x in self.soup.data.values()])
 
     def search(self, query=None):
-        if not query:
-            records = sorted(
-                self.soup.data.values(),
-                key=lambda k: k.attrs.get("date", ""),
-                reverse=True,
-            )
+        """
+        @param query: optional mapping with the following optional keys:
+            - block_id: filter records belonging to this form block
+            - start_date: only records with date >= start_date
+            - end_date: only records with date <= end_date
+
+        'block_id' is filtered through the souper/repoze.catalog index
+        (it's indexed). 'date' is NOT indexed on the catalog.
+        """
+        query = query or {}
+        block_id = query.get("block_id")
+        start_date = query.get("start_date")
+        end_date = query.get("end_date")
+
+        records = self._records_by_block_id(block_id)
+
+        if start_date or end_date:
+            records = [
+                record
+                for record in records
+                if self._matches_date_range(record, start_date, end_date)
+            ]
+
+        records.sort(key=lambda record: record.attrs.get("date"), reverse=True)
         return records
+
+    def _records_by_block_id(self, block_id):
+        """
+        Return the records for the given block_id (using the catalog
+        index), or every stored record if block_id is not passed.
+        """
+        if not block_id:
+            return list(self.soup.data.values())
+        _, docids = self.soup.catalog.query(Eq("block_id", block_id))
+        return [self.soup.data[docid] for docid in docids]
+
+    @staticmethod
+    def _matches_date_range(record, start_date, end_date):
+        """
+        Whether a single record's stored 'date' attribute falls
+        within [start_date, end_date]. A record with no 'date'
+        attribute never matches a date-range filter.
+        """
+        record_date = record.attrs.get("date")
+        if record_date is None:
+            return False
+        if start_date and record_date < start_date:
+            return False
+        if end_date and record_date > end_date:
+            return False
+        return True
 
     def delete(self, id):
         record = self.soup.get(id)

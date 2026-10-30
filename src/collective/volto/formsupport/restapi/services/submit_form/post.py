@@ -54,11 +54,16 @@ class PostEventService:
 
 class SubmitPost(Service):
     fields = []
+    # Class attributes rather than assignments in __init__: upstream 3.3.0
+    # moved them because the user is not set yet when a Service is constructed,
+    # and `reply()` fills all four anyway. Our `__init__` was a 3.2.2 leftover
+    # that only called super(), so it goes with them.
+    block = {}
+    block_id = ""
+    form_data_adapter = None
+    form_data = {}
 
-    def __init__(self, context, request):
-        super().__init__(context, request)
-
-        self.block = {}
+    def reply(self):
         self.form_data_adapter = getMultiAdapter(
             (self.context, self.request), IPostAdapter
         )
@@ -67,8 +72,6 @@ class SubmitPost(Service):
 
         if self.block_id:
             self.block = self.get_block_data(block_id=self.block_id)
-
-    def reply(self):
         store_action = self.block.get("store", False)
         send_action = self.block.get("send", [])
 
@@ -402,14 +405,15 @@ class SubmitPost(Service):
         host.send(msg, charset=charset, immediate=True)
 
     def manage_attachments(self, msg):
-        attachments = self.form_data.get("attachments", {})
-
+        """
+        add attachments as mime parts to the message
+        """
         if self.block.get("attachXml", False):
             self.attach_xml(msg=msg)
 
-        if not attachments:
-            return []
-        for key, value in attachments.items():
+        attachments = self.form_data.get("attachments") or {}
+        # TODO: skip attachment if not found in form fields
+        for value in attachments.values():
             content_type = "application/octet-stream"
             filename = None
             if isinstance(value, dict):
@@ -463,8 +467,13 @@ class SubmitPost(Service):
 
     def store_data(self):
         store = getMultiAdapter((self.context, self.request), IFormDataStore)
-
-        res = store.add(data=self.form_data_adapter.filter_parameters())
+        data = self.form_data_adapter.filter_parameters()
+        if self.form_data.get("attachments"):
+            data += [
+                {"field_id": a["field_id"], "value": a}
+                for a in self.form_data["attachments"].values()
+            ]
+        res = store.add(data=data)
 
         if not res:
             raise BadRequest("Unable to store data")
