@@ -1,7 +1,11 @@
 from collective.volto.formsupport.interfaces import IFormDataStore
+from collective.volto.formsupport.utils import get_blocks
+from copy import deepcopy
 from io import StringIO
+from plone.namedfile import NamedBlobFile
 from plone.restapi.serializer.converters import json_compatible
 from plone.restapi.services import Service
+from zExceptions import NotFound
 from zope.component import getMultiAdapter
 
 import csv
@@ -14,20 +18,63 @@ class FormDataExportGet(Service):
     def __init__(self, context, request):
         super().__init__(context, request)
         self.form_fields_order = []
-        self.form_block = {}
+        self.form_block = None
+        self.block_id = self.request.get("block_id")
 
         blocks = getattr(context, "blocks", {})
         if not blocks:
-            return
+            raise NotFound("No blocks found")
         for id, block in blocks.items():
+            if self.block_id and id != self.block_id:
+                continue
             block_type = block.get("@type", "")
             if block_type == "form":
                 self.form_block = block
+                self.form_block_id = id
 
         if self.form_block:
             for field in self.form_block.get("subblocks", []):
-                field_id = field["field_id"]
+                # The key a record is STORED under: the custom id where the form
+                # block carries one for this field, else the field's own id. The
+                # raw field_id is not stable -- delete a field and add it back
+                # and it is a new one -- so ordering by it would read every
+                # earlier submission as a legacy column and the CSV would grow a
+                # second column for what an author sees as one field.
+                # Two spellings reach this. A question edited in the sidebar
+                # carries `custom_field_id` on itself, which is where
+                # submit_form/field.py reads it and where a frontend can offer
+                # it to an author. A legacy form instead carries one key per
+                # question on the BLOCK, named after the question's id -- the
+                # old editor's "Data ID mapping". Both mean the same thing.
+                custom_field_id = field.get("custom_field_id") or self.form_block.get(
+                    field["field_id"]
+                )
+                field_id = custom_field_id or field["field_id"]
                 self.form_fields_order.append(field_id)
+
+    def get_form_fields(self):
+        blocks = get_blocks(self.context)
+
+        if not blocks:
+            return {}
+        form_block = {}
+        for id, block in blocks.items():
+            if id != self.form_block_id:
+                continue
+            block_type = block.get("@type", "")
+            if block_type == "form":
+                form_block = deepcopy(block)
+        if not form_block:
+            return {}
+
+        subblocks = form_block.get("subblocks", [])
+
+        # Add the 'custom_field_id' field back in as this isn't stored with each subblock
+        for index, field in enumerate(subblocks):
+            if form_block.get(field["field_id"]):
+                subblocks[index]["custom_field_id"] = form_block.get(field["field_id"])
+
+        return subblocks
 
     def get_ordered_keys(self, record):
         """
@@ -61,37 +108,64 @@ class FormDataExportGet(Service):
             data = data.encode("utf-8")
         self.request.response.write(data)
 
-    def get_fields_labels(self, item):
-        return item.attrs.get("fields_labels", {})
+    def get_fields_labels(self):
+        # Keyed as the records are stored (see form_fields_order above), and
+        # labelled as this fork labels them: the human label.
+        return {
+            x.get("custom_field_id") or x["field_id"]: x.get("label", x["field_id"])
+            for x in self.get_form_fields()
+            if x.get("field_type", "") != "static_text"
+        }
 
     def get_data(self):
         store = getMultiAdapter((self.context, self.request), IFormDataStore)
         sbuf = StringIO()
         fixed_columns = ["date"]
         columns = []
-
+        legacy_columns = []
         rows = []
+        fields_labels = self.get_fields_labels()
+
         for item in store.search():
+            if self.block_id and item.attrs.get("block_id") != self.block_id:
+                continue
             data = {}
-            fields_labels = self.get_fields_labels(item)
+
             for k in self.get_ordered_keys(item):
                 if k in SKIP_ATTRS:
                     continue
+
                 value = item.attrs.get(k, None)
-                label = fields_labels.get(k, k)
-                if label not in columns and label not in fixed_columns:
-                    columns.append(label)
-                data[label] = json_compatible(value)
+                label = {**item.attrs.get("fields_labels", {}), **fields_labels}.get(
+                    k, k
+                )
+
+                if k not in self.form_fields_order and label not in legacy_columns:
+                    legacy_columns.append(label)
+
+                if isinstance(value, NamedBlobFile):
+                    data[label] = value.filename
+                else:
+                    data[label] = json_compatible(value)
+
             for k in fixed_columns:
                 # add fixed columns values
                 value = item.attrs.get(k, None)
                 data[k] = json_compatible(value)
+
             rows.append(data)
+
+        columns.extend(fields_labels.values())
+        columns.extend(sorted(legacy_columns))
         columns.extend(fixed_columns)
+
         writer = csv.DictWriter(sbuf, fieldnames=columns, quoting=csv.QUOTE_ALL)
         writer.writeheader()
+
         for row in rows:
             writer.writerow(row)
+
         res = sbuf.getvalue()
         sbuf.close()
+
         return res
