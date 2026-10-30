@@ -147,14 +147,17 @@ class PostAdapter:
                 name=self.block["captcha"],
             ).verify(self.form_data.get("captcha"))
 
-        self.validate_bcc()
-        # Restored from upstream, call site and all. This fork dropped both
-        # inside a large refactor (Form Add Event, #73) with no note saying
-        # why, while upstream still ships it and fixed it in 3.3.3 (an empty
-        # email field no longer raises). It does not collide with this fork's
-        # validators: a `from` field is checked here regardless, and `isEmail`
-        # stays an opt-in rule an author can add to a text field.
+        # Restored from upstream, call site and all, and BEFORE validate_bcc as
+        # upstream orders them: a bcc address is taken from an email field, so
+        # validating the fields afterwards let an invalid one reach the bcc
+        # path first. This fork dropped both inside a large refactor (Form Add
+        # Event, #73) with no note saying why, while upstream still ships it
+        # and fixed it in 3.3.3 (an empty email field no longer raises). It
+        # does not collide with this fork's validators: a `from` field is
+        # checked here regardless, and `isEmail` stays an opt-in rule an author
+        # can add to a text field.
         self.validate_email_fields()
+        self.validate_bcc()
 
     def validate_email_fields(self):
         email_fields = [
