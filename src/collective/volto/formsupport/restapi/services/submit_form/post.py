@@ -469,10 +469,24 @@ class SubmitPost(Service):
         store = getMultiAdapter((self.context, self.request), IFormDataStore)
         data = self.form_data_adapter.filter_parameters()
         if self.form_data.get("attachments"):
-            data += [
-                {"field_id": a["field_id"], "value": a}
-                for a in self.form_data["attachments"].values()
-            ]
+            # Through the same factory as every other answer. Upstream appends
+            # these as plain dicts, which works there because filter_parameters
+            # returns dicts too -- this fork returns Field objects, and the
+            # store reads `.field_id` / `.internal_value` off each one, so a
+            # dict among them raised and the submission 500'd.
+            #
+            # Merged with the question's own definition first, so `field_type`
+            # is present and construct_field builds the AttachmentField this
+            # fork already has; the datamanager then stores it as a blobfile.
+            subblocks = {
+                f.get("field_id"): f for f in self.block.get("subblocks", [])
+            }
+            data += construct_fields(
+                [
+                    {**subblocks.get(a["field_id"], {}), "field_id": a["field_id"], "value": a}
+                    for a in self.form_data["attachments"].values()
+                ]
+            )
         res = store.add(data=data)
 
         if not res:
