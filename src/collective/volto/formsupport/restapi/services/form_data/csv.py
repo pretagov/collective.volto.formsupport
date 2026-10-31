@@ -7,7 +7,7 @@ from zope.component import getMultiAdapter
 import csv
 
 
-SKIP_ATTRS = ["block_id", "fields_labels", "fields_order"]
+SKIP_ATTRS = ["block_id", "fields_labels", "fields_order", "fields_types"]
 
 
 class FormDataExportGet(Service):
