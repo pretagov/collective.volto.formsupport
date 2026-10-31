@@ -1,3 +1,6 @@
+from collective.volto.formsupport.restapi.services.form_data.csv import (
+    FormDataExportGet,
+)
 from collective.volto.formsupport.testing import (  # noqa: E501,
     VOLTO_FORMSUPPORT_API_FUNCTIONAL_TESTING,
 )
@@ -9,6 +12,7 @@ from plone.app.testing import SITE_OWNER_NAME
 from plone.app.testing import SITE_OWNER_PASSWORD
 from plone.app.testing import TEST_USER_ID
 from plone.restapi.testing import RelativeSession
+from Products.Five import BrowserView
 from Products.MailHost.interfaces import IMailHost
 from zope.component import getUtility
 
@@ -435,3 +439,53 @@ class TestMailStore(unittest.TestCase):
         # The types are per-field metadata, not an answer of their own: the
         # map they are read from must not surface as a field.
         self.assertNotIn("fields_types", item)
+
+    def test_export_orders_by_the_id_a_record_is_stored_under(self):
+        """The CSV's fallback ordering uses the key the records actually have.
+
+        A renamed field is STORED under its custom id (see
+        FormDataStore.add), in both spellings: the field carries
+        `custom_field_id` itself, or the form block carries one key per field
+        named after the field's id (the "Data ID mapping" of the older
+        editor). Ordering by the raw `field_id` therefore matches nothing, and
+        every answer falls through to the "stored in the record but not in the
+        form" branch, which orders by whatever order the record's attributes
+        happen to come back in.
+        """
+        self.document.blocks = {
+            "form-id": {
+                "@type": "form",
+                "store": True,
+                "mapped-on-the-block": "from-the-block",
+                "subblocks": [
+                    {
+                        "label": "Message",
+                        "field_id": "message",
+                        "field_type": "text",
+                    },
+                    {
+                        "label": "On the field",
+                        "field_id": "mapped-on-the-field",
+                        "field_type": "text",
+                        "custom_field_id": "from-the-field",
+                    },
+                    {
+                        "label": "On the block",
+                        "field_id": "mapped-on-the-block",
+                        "field_type": "text",
+                    },
+                ],
+            },
+        }
+        transaction.commit()
+
+        # plone.rest's `service` directive builds the published class as
+        # `type(factory.__name__, (factory, BrowserView), ...)` — the view
+        # gets its `__init__` from BrowserView, and the class in the module
+        # cannot be constructed on its own. Build it the same way.
+        published = type("Published", (FormDataExportGet, BrowserView), {})
+        service = published(self.document, self.layer["request"])
+        self.assertEqual(
+            service.form_fields_order,
+            ["message", "from-the-field", "from-the-block"],
+        )
