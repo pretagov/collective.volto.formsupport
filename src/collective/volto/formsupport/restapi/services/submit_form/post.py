@@ -67,11 +67,16 @@ class SubmitPost(Service):
         self.form_data_adapter = getMultiAdapter(
             (self.context, self.request), IPostAdapter
         )
-        self.form_data = self.get_form_data()
-        self.block_id = self.form_data.get("block_id", "")
-
-        if self.block_id:
-            self.block = self.get_block_data(block_id=self.block_id)
+        # The adapter does this work in its __init__ and validates in its
+        # __call__: validate_form() raises BadRequest, and a field error sets
+        # 400 and returns the error payload instead of the form data. Calling
+        # it is what makes validation happen at all.
+        form_data = self.get_form_data()
+        if "error" in form_data:
+            return form_data
+        self.form_data = form_data
+        self.block_id = self.form_data_adapter.block_id
+        self.block = self.form_data_adapter.block
         store_action = self.block.get("store", False)
         send_action = self.block.get("send", [])
 
@@ -79,77 +84,6 @@ class SubmitPost(Service):
         alsoProvides(self.request, IDisableCSRFProtection)
 
         notify(PostEventService(self.context, self.form_data))
-
-        # Construct self.fieldss
-        fields_data = []
-        for submitted_field in self.form_data.get("data", []):
-            # TODO: Review if fields submitted without a field_id should be included. Is breaking change if we remove it
-            if submitted_field.get("field_id") is None:
-                fields_data.append(submitted_field)
-                continue
-            for field in self.block.get("subblocks", []):
-                if field.get("id", field.get("field_id")) == submitted_field.get(
-                    "field_id"
-                ):
-                    validation_ids_to_apply = field.get("validations", [])
-                    validations_for_field = {}
-                    for validation_and_setting_id, setting_value in field.get(
-                        "validationSettings", {}
-                    ).items():
-                        split_validation_and_setting_ids = validation_and_setting_id.split("-")
-                        if len(split_validation_and_setting_ids) < 2:
-                            continue
-                        validation_id, setting_id = split_validation_and_setting_ids
-                        if validation_id not in validation_ids_to_apply:
-                            continue
-                        if validation_id not in validations_for_field:
-                            validations_for_field[validation_id] = {}
-                        validations_for_field[validation_id][setting_id] = setting_value
-                    fields_data.append(
-                        {
-                            **field,
-                            **submitted_field,
-                            "display_value_mapping": field.get("display_values"),
-                            "custom_field_id": self.block.get(field["field_id"]),
-                            # We're straying from how validations are serialized and deserialized here to make our lives easier.
-                            #   Let's use a dictionary of {'validation_id': {'setting_id': 'setting_value'}} when working inside fields for simplicity.
-                            "validations": validations_for_field,
-                        }
-                    )
-        self.fields = construct_fields(fields_data)
-
-        errors = {}
-        for field in self.fields:
-            show_when = field.show_when_when
-            should_show = True
-            if show_when and show_when != "always":
-                target_field = [
-                    val for val in self.fields if val.id == field.show_when_when
-                ][0]
-                should_show = (
-                    target_field.should_show(
-                        show_when_is=field.show_when_is, target_value=field.show_when_to
-                    )
-                    if target_field
-                    else True
-                )
-
-            if should_show:
-                field_errors = field.validate(self.request)
-
-                if field_errors:
-                    errors[field.field_id] = field_errors
-
-        if errors:
-            self.request.response.setStatus(400)
-            return json_compatible(
-                {
-                    "error": {
-                        "type": "Invalid",
-                        "errors": errors,
-                    }
-                }
-            )
 
         if send_action or self.get_bcc():
             try:
@@ -201,19 +135,6 @@ class SubmitPost(Service):
                                 return data.get("value", "")
 
         return self.form_data.get("from", "") or self.block.get("default_from", "")
-
-    def get_block_data(self, block_id):
-        blocks = get_blocks(self.context)
-        if not blocks:
-            return {}
-        for id, block in blocks.items():
-            if id != block_id:
-                continue
-            block_type = block.get("@type", "")
-            if block_type != "form":
-                continue
-            return block
-        return {}
 
     def get_bcc(self):
         bcc = []

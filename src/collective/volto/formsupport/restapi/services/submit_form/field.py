@@ -6,10 +6,11 @@ from collective.volto.formsupport.validation import getValidations
 from plone import api
 from plone.schema.email import _isemail
 from zExceptions import BadRequest
+from typing import Any
+import re
 from zope.i18n import translate
 
 validation_message_matcher = re.compile("Validation failed\(([^\)]+)\): ")
-
 
 def always():
     return True
@@ -88,7 +89,7 @@ class Field:
         show_when_validator = show_when_validators[show_when_is]
         if not show_when_validator:
             return always_show_validator
-        return show_when_validator(value=self.value, target_value=target_value)
+        return show_when_validator(value=self.internal_value, target_value=target_value)
 
     @property
     def label(self):
@@ -175,6 +176,10 @@ class DateField(Field):
     def display_value(self):
         return api.portal.get_localized_time(self.internal_value or "")
 
+class TimeField(Field):
+    def display_value(self):
+        return api.portal.get_localized_time(self.internal_value, time_only=True)
+
 
 def construct_field(field_data):
     if field_data.get("widget") == "single_choice":
@@ -185,6 +190,8 @@ def construct_field(field_data):
         return EmailField(field_data)
     elif field_data.get("field_type") == "date":
         return DateField(field_data)
+    elif field_data.get("field_type") == "time":
+        return TimeField(field_data)
 
     return Field(field_data)
 

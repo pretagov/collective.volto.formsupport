@@ -1,7 +1,9 @@
 from collective.volto.formsupport import _
 from collective.volto.formsupport.interfaces import ICaptchaSupport
 from collective.volto.formsupport.interfaces import IPostAdapter
+from collective.volto.formsupport.restapi import GLOBAL_FORM_REGISTRY_RECORD_ID
 from collective.volto.formsupport.restapi.services.submit_form.field import (
+    construct_field,
     construct_fields,
 )
 from collective.volto.formsupport.utils import get_blocks
@@ -19,6 +21,10 @@ from zope.interface import Interface
 import base64
 import math
 import os
+from datetime import datetime
+from urllib.parse import urlparse
+
+from plone.restapi.serializer.converters import json_compatible
 
 
 @implementer(IPostAdapter)
@@ -32,8 +38,12 @@ class PostAdapter:
         self.request = request
         self.form_data = self.extract_data_from_request()
         self.block_id = self.form_data.get("block_id", "")
+        self.global_form_id = self.extract_data_from_request().get("global_form_id", "")
         if self.block_id:
-            self.block = self.get_block_data(block_id=self.block_id)
+            self.block = self.get_block_data(
+                block_id=self.block_id,
+                global_form_id=self.form_data.get("global_form_id"),
+            )
 
     def __call__(self):
         """
@@ -45,8 +55,46 @@ class PostAdapter:
 
         self.validate_form()
 
-        for field in self.filter_parameters():
-            field.validate(request=self.request)
+        filtered_fields = self.filter_parameters()
+
+        errors = {}
+        for field in filtered_fields:
+            show_when = field.show_when_when
+            should_show = True
+            if show_when and show_when != "always":
+                target_field = [
+                    val for val in filtered_fields if val.id == field.show_when_when
+                ]
+                # We're an array at this point
+                if target_field:
+                    target_field = target_field[0]
+                    should_show = (
+                        target_field.should_show(
+                            show_when_is=field.show_when_is, target_value=field.show_when_to
+                        )
+                        if target_field
+                        else True
+                    )
+
+            if should_show:
+                field_errors = field.validate(self.request)
+
+                if field_errors:
+                    errors[field.field_id] = field_errors
+
+        if errors:
+            self.request.response.setStatus(400)
+            return json_compatible(
+                {
+                    "error": {
+                        "type": "Invalid",
+                        "errors": errors,
+                    }
+                }
+            )
+
+        # for field in self.filter_parameters():
+        #     field.validate(request=self.request)
 
         return self.form_data
 
@@ -56,7 +104,10 @@ class PostAdapter:
         fixed_fields = []
         transforms = api.portal.get_tool(name="portal_transforms")
 
-        block = self.get_block_data(block_id=form_data.get("block_id", ""))
+        block = self.get_block_data(
+            block_id=form_data.get("block_id", ""),
+            global_form_id=form_data.get("global_form_id"),
+        )
         block_fields = [x.get("field_id", "") for x in block.get("subblocks", [])]
         custom_block_fields = [
             block.get(field_id) for field_id in block_fields if block.get(field_id)
@@ -78,12 +129,24 @@ class PostAdapter:
 
         return form_data
 
-    def get_block_data(self, block_id):
+    def get_block_data(self, block_id, global_form_id):
         blocks = get_blocks(self.context)
+        global_form_id = global_form_id
+        if global_form_id:
+            global_forms = api.portal.get_registry_record(
+                GLOBAL_FORM_REGISTRY_RECORD_ID
+            )
+            if global_forms:
+                blocks = {**blocks, **global_forms}
         if not blocks:
             return {}
         for id, block in blocks.items():
-            if id != block_id:
+            # Prefer local forms it they're available, fall back to global form
+            if (
+                id != block_id
+                and id != global_form_id
+                and block.get("global_form_id") != global_form_id
+            ):
                 continue
             block_type = block.get("@type", "")
             if block_type != "form":
@@ -234,7 +297,28 @@ class PostAdapter:
         do not send attachments fields.
         Used for email message body, and xml attachment (?)
         """
-        return [field for field in self.format_fields() if field.send_in_email]
+        fields = [field for field in self.format_fields() if field.send_in_email]
+
+        additionalInfo = self.block.get('sendAdditionalInfo', [])
+
+        # Using the referer rather than self.context as the context doesn't always match up to the current page depending on the form setup.
+        pageUrl = self.request.get("HTTP_REFERER")
+        parsedUrl = urlparse(pageUrl)
+        content_object_for_path = api.content.get(parsedUrl.path)
+
+        if "date" in additionalInfo:
+            fields.append(construct_field({'field_id': 'date', 'label': 'Date', 'field_type': 'date', 'value': datetime.now()}))
+        if "time" in additionalInfo:
+            fields.append(construct_field({'field_id': 'time', 'label': 'Time','field_type': 'time', 'value': datetime.now()}))
+        if "currentUrl" in additionalInfo:
+            fields.append(construct_field({'field_id': 'url', 'label': 'URL', 'value': parsedUrl.path}))
+        if "title" in additionalInfo:
+            if content_object_for_path:
+                fields.append(construct_field({'field_id': 'current_page_title', 'label': 'Page title', 'value': content_object_for_path.title}))
+            else:
+                print("FAILED TO GET CONTENT OBJECT")
+
+        return fields
 
     def format_fields(self):
         fields_data = []
@@ -243,16 +327,52 @@ class PostAdapter:
             if submitted_field.get("field_id") is None:
                 fields_data.append(submitted_field)
                 continue
+            # for field in self.block.get("subblocks", []):
+            #     if field.get("id", field.get("field_id")) == submitted_field.get(
+            #         "field_id"
+            #     ):
+            #         fields_data.append(
+            #             {
+            #                 **field,
+            #                 **submitted_field,
+            #                 "display_value_mapping": field.get("display_values"),
+            #                 "custom_field_id": self.block.get(field["field_id"]),
+            #             }
+            #         )
+
+            matching_field = None
             for field in self.block.get("subblocks", []):
-                if field.get("id", field.get("field_id")) == submitted_field.get(
-                    "field_id"
-                ):
-                    fields_data.append(
-                        {
-                            **field,
-                            **submitted_field,
-                            "display_value_mapping": field.get("display_values"),
-                            "custom_field_id": self.block.get(field["field_id"]),
-                        }
-                    )
+                if field.get("id", field.get("field_id")) == submitted_field.get("field_id"):
+                    matching_field = field
+                    break
+
+            if matching_field is None:
+                continue
+
+            validations_for_field = {}
+            validation_ids_to_apply = matching_field.get("validations", [])
+            for validation_and_setting_id, setting_value in matching_field.get(
+                "validationSettings", {}
+            ).items():
+                split_validation_and_setting_ids = validation_and_setting_id.split("-")
+                if len(split_validation_and_setting_ids) < 2:
+                    continue
+                validation_id, setting_id = split_validation_and_setting_ids
+                if validation_id not in validation_ids_to_apply:
+                    continue
+                if validation_id not in validations_for_field:
+                    validations_for_field[validation_id] = {}
+                validations_for_field[validation_id][setting_id] = setting_value
+            fields_data.append(
+                {
+                    **matching_field,
+                    **submitted_field,
+                    "id": submitted_field["field_id"],  # Ensure we always use the submitted field id
+                    "display_value_mapping": matching_field.get("display_values"),
+                    "custom_field_id": self.block.get(submitted_field["field_id"]),
+                    # We're straying from how validations are serialized and deserialized here to make our lives easier.
+                    #   Let's use a dictionary of {'validation_id': {'setting_id': 'setting_value'}} when working inside fields for simplicity.
+                    "validations": validations_for_field,
+                }
+            )
         return construct_fields(fields_data)

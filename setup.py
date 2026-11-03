@@ -84,12 +84,12 @@ setup(
         "honeypot": [
             "collective.honeypot>=2.1",
         ],
-        "validation": [
-            "Products.validation",
-            "z3c.form"
-        ],
         "blocksfield": [
             "collective.volto.blocksfield",
+        ],
+        "validation": [
+            "Products.validation",
+            "z3c.form",
         ],
         "test": [
             "plone.app.testing",

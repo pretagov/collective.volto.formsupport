@@ -1,3 +1,6 @@
+from collective.volto.formsupport.restapi import GLOBAL_FORM_REGISTRY_RECORD_ID
+from plone.api.portal import get_registry_record
+from plone.api.portal import set_registry_record
 from plone.dexterity.interfaces import IDexterityContent
 from plone.restapi.bbb import IPloneSiteRoot
 from plone.restapi.interfaces import IBlockFieldDeserializationTransformer
@@ -5,6 +8,21 @@ from Products.PortalTransforms.transforms.safe_html import SafeHTML
 from zope.component import adapter
 from zope.interface import implementer
 from zope.publisher.interfaces.browser import IBrowserRequest
+
+from uuid import uuid4
+
+def update_global_forms(value):
+    global_form_id = value.get("global_form_id")
+
+    if not global_form_id:
+        global_form_id = str(uuid4())
+
+    global_forms_record = get_registry_record(GLOBAL_FORM_REGISTRY_RECORD_ID)
+    global_forms_record[global_form_id] = value
+    set_registry_record(GLOBAL_FORM_REGISTRY_RECORD_ID, global_forms_record)
+
+    value["global_form_id"] = global_form_id
+    return value
 
 
 class FormBlockDeserializerBase:
@@ -27,7 +45,7 @@ class FormBlockDeserializerBase:
             value["send_message"] = transform.scrub_html(value["send_message"])
 
         self._update_validations(value)
-
+        value = update_global_forms(value)
         return value
 
     def _update_validations(self, data):
