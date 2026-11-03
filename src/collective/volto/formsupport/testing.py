@@ -7,6 +7,17 @@ from plone.app.testing import quickInstallProduct
 from plone.restapi.testing import PloneRestApiDXLayer
 from plone.testing import z2
 
+# The validators register themselves with provideUtility when
+# collective.volto.formsupport.validation is first imported, into whatever
+# component registry is current then. plone.testing's LayerCleanup replaces
+# that registry when a layer sets up, so by the time a test issues a request
+# getUtilitiesFor(IFieldValidator) is EMPTY and every validation silently
+# passes -- a form whose field may be at most 5 characters long accepted
+# "far too long" and answered 200. A real Zope instance keeps the registry the
+# import wrote to, which is why the vocabulary serves 15 validators there.
+# Each layer below re-registers them so that tests see what production sees.
+from collective.volto.formsupport.validation import _update_validators
+
 import collective.honeypot
 import collective.MockMailHost
 import collective.volto.formsupport
@@ -26,6 +37,7 @@ class VoltoFormsupportLayer(PloneSandboxLayer):
         self.loadZCML(package=plone.restapi)
         self.loadZCML(package=collective.volto.formsupport)
         self.loadZCML(package=collective.volto.otp)
+        _update_validators()
 
     def setUpPloneSite(self, portal):
         applyProfile(portal, "plone.restapi:blocks")
@@ -65,6 +77,7 @@ class VoltoFormsupportRestApiLayer(PloneRestApiDXLayer):
         self.loadZCML(package=collective.honeypot)
         self.loadZCML(package=collective.volto.formsupport)
         self.loadZCML(package=collective.volto.otp)
+        _update_validators()
 
     def setUpPloneSite(self, portal):
         applyProfile(portal, "collective.volto.formsupport:default")

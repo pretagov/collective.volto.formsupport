@@ -131,7 +131,6 @@ class PostAdapter:
 
     def get_block_data(self, block_id, global_form_id):
         blocks = get_blocks(self.context)
-        global_form_id = global_form_id
         if global_form_id:
             global_forms = api.portal.get_registry_record(
                 GLOBAL_FORM_REGISTRY_RECORD_ID
@@ -140,18 +139,26 @@ class PostAdapter:
                 blocks = {**blocks, **global_forms}
         if not blocks:
             return {}
+        # Prefer a local form, fall back to a global one -- in two passes,
+        # because a single pass returns whichever comes first in the merged
+        # dict. The fallback runs ONLY when a global_form_id was asked for: the
+        # one-pass version compared `block.get("global_form_id")` against a
+        # missing global_form_id, so None == None matched every block and any
+        # form in the context answered for any block_id. That is what let
+        # `block_id: "unknown"` be accepted and submitted
+        # (test_email_not_send_if_block_id_is_incorrect_or_not_present).
         for id, block in blocks.items():
-            # Prefer local forms it they're available, fall back to global form
-            if (
-                id != block_id
-                and id != global_form_id
-                and block.get("global_form_id") != global_form_id
-            ):
-                continue
-            block_type = block.get("@type", "")
-            if block_type != "form":
-                continue
-            return block
+            if block.get("@type", "") == "form" and id == block_id:
+                return block
+        if global_form_id:
+            for id, block in blocks.items():
+                if block.get("@type", "") != "form":
+                    continue
+                if (
+                    id == global_form_id
+                    or block.get("global_form_id") == global_form_id
+                ):
+                    return block
         return {}
 
     def validate_form(self):
