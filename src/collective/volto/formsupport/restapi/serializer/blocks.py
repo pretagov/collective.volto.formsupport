@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 from collective.volto.formsupport.interfaces import ICaptchaSupport
 from collective.volto.formsupport.interfaces import ICollectiveVoltoFormsupportLayer
 from collective.volto.formsupport.validation import get_validation_information
@@ -17,7 +16,6 @@ from zope.component import getMultiAdapter
 from zope.interface import implementer
 
 import os
-
 
 
 class FormSerializer:

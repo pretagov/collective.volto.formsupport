@@ -43,8 +43,16 @@ class FormBlockDeserializerBase:
         if value.get("send_message", ""):
             transform = SafeHTML()
             value["send_message"] = transform.scrub_html(value["send_message"])
+
+        self._update_validations(value)
         value = update_global_forms(value)
         return value
+
+    def _update_validations(self, data):
+        for field in data.get("subblocks"):
+            if field.get("field_type") not in ["text", "textarea", "from"]:
+                field["validations"] = []
+                field["validationSettings"] = {}
 
 
 @adapter(IDexterityContent, IBrowserRequest)

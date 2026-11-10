@@ -11,7 +11,6 @@ import os
 import re
 
 
-
 try:
     from plone.base.interfaces.controlpanel import IMailSchema
 except ImportError:
@@ -22,9 +21,13 @@ from collective.volto.formsupport.events import FormSubmittedEvent
 from collective.volto.formsupport.interfaces import IFormDataStore
 from collective.volto.formsupport.interfaces import IPostAdapter
 from collective.volto.formsupport.interfaces import IPostEvent
+from collective.volto.formsupport.restapi.services.submit_form.field import (
+    construct_fields,
+)
 from collective.volto.formsupport.utils import get_blocks
 from plone.protect.interfaces import IDisableCSRFProtection
 from plone.registry.interfaces import IRegistry
+from plone.restapi.serializer.converters import json_compatible
 from plone.restapi.services import Service
 from xml.etree.ElementTree import Element
 from xml.etree.ElementTree import ElementTree
@@ -51,20 +54,29 @@ class PostEventService:
 
 class SubmitPost(Service):
     fields = []
+    # Class attributes rather than assignments in __init__: upstream 3.3.0
+    # moved them because the user is not set yet when a Service is constructed,
+    # and `reply()` fills all four anyway. Our `__init__` was a 3.2.2 leftover
+    # that only called super(), so it goes with them.
+    block = {}
+    block_id = ""
+    form_data_adapter = None
+    form_data = {}
 
-    def __init__(self, context, request):
-        super().__init__(context, request)
-
-        self.block = {}
+    def reply(self):
         self.form_data_adapter = getMultiAdapter(
             (self.context, self.request), IPostAdapter
         )
-        # We've already done all the work to get this data, let's reuse it.
-        self.form_data = self.form_data_adapter.form_data
+        # The adapter does this work in its __init__ and validates in its
+        # __call__: validate_form() raises BadRequest, and a field error sets
+        # 400 and returns the error payload instead of the form data. Calling
+        # it is what makes validation happen at all.
+        form_data = self.get_form_data()
+        if "error" in form_data:
+            return form_data
+        self.form_data = form_data
         self.block_id = self.form_data_adapter.block_id
         self.block = self.form_data_adapter.block
-
-    def reply(self):
         store_action = self.block.get("store", False)
         send_action = self.block.get("send", [])
 
@@ -314,14 +326,15 @@ class SubmitPost(Service):
         host.send(msg, charset=charset, immediate=True)
 
     def manage_attachments(self, msg):
-        attachments = self.form_data.get("attachments", {})
-
+        """
+        add attachments as mime parts to the message
+        """
         if self.block.get("attachXml", False):
             self.attach_xml(msg=msg)
 
-        if not attachments:
-            return []
-        for key, value in attachments.items():
+        attachments = self.form_data.get("attachments") or {}
+        # TODO: skip attachment if not found in form fields
+        for value in attachments.values():
             content_type = "application/octet-stream"
             filename = None
             if isinstance(value, dict):
@@ -357,6 +370,7 @@ class SubmitPost(Service):
         output = BytesIO()
         xmlRoot = Element("form")
 
+
         for field in self.form_data_adapter.format_fields():
             SubElement(xmlRoot, "field", name=field.field_id).text = str(
                 field.internal_value
@@ -374,8 +388,27 @@ class SubmitPost(Service):
 
     def store_data(self):
         store = getMultiAdapter((self.context, self.request), IFormDataStore)
-
-        res = store.add(data=self.form_data_adapter.filter_parameters())
+        data = self.form_data_adapter.filter_parameters()
+        if self.form_data.get("attachments"):
+            # Through the same factory as every other answer. Upstream appends
+            # these as plain dicts, which works there because filter_parameters
+            # returns dicts too -- this fork returns Field objects, and the
+            # store reads `.field_id` / `.internal_value` off each one, so a
+            # dict among them raised and the submission 500'd.
+            #
+            # Merged with the question's own definition first, so `field_type`
+            # is present and construct_field builds the AttachmentField this
+            # fork already has; the datamanager then stores it as a blobfile.
+            subblocks = {
+                f.get("field_id"): f for f in self.block.get("subblocks", [])
+            }
+            data += construct_fields(
+                [
+                    {**subblocks.get(a["field_id"], {}), "field_id": a["field_id"], "value": a}
+                    for a in self.form_data["attachments"].values()
+                ]
+            )
+        res = store.add(data=data)
 
         if not res:
             raise BadRequest("Unable to store data")

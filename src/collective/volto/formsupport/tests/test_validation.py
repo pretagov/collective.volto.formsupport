@@ -77,6 +77,93 @@ class TestMailSend(unittest.TestCase):
         transaction.commit()
         return response
 
+    # The two tests below are the only end-to-end cover for the thing this
+    # fork exists to add: a validation authored on a field is enforced by the
+    # backend on @submit-form. `test_validation` under them asserts nothing --
+    # every assertion in it is commented out -- so moving where validation runs
+    # (into the post adapter's __call__) could not have been caught by it.
+    def _store_form_with_a_max_length(self):
+        self.document.blocks = {
+            "form-id": {
+                "@type": "form",
+                "store": True,
+                "subblocks": [
+                    {
+                        "field_id": "short-text",
+                        "id": "short-text",
+                        "field_type": "text",
+                        "label": "Short text",
+                        "required": False,
+                        "show_when_when": "always",
+                        "validations": ["maxCharacters"],
+                        # validationSettings keys are `<validation>-<setting>`;
+                        # a key without the dash is skipped silently.
+                        "validationSettings": {"maxCharacters-characters": "5"},
+                    }
+                ],
+            },
+        }
+        transaction.commit()
+
+    def test_submit_is_refused_when_a_field_fails_its_validation(self):
+        self._store_form_with_a_max_length()
+
+        response = self.submit_form(
+            data={
+                "block_id": "form-id",
+                "data": [
+                    {
+                        "field_id": "short-text",
+                        "value": "far too long",
+                        "label": "Short text",
+                    }
+                ],
+            },
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(
+            response.json()["error"],
+            {
+                "type": "Invalid",
+                "errors": {
+                    "short-text": {
+                        "maxCharacters": "is more than 5 characters long",
+                    }
+                },
+            },
+        )
+
+    def test_submit_is_accepted_when_every_field_passes_its_validation(self):
+        self._store_form_with_a_max_length()
+
+        response = self.submit_form(
+            data={
+                "block_id": "form-id",
+                "data": [
+                    {
+                        "field_id": "short-text",
+                        "value": "fine",
+                        "label": "Short text",
+                    }
+                ],
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.json(),
+            {
+                "data": [
+                    {
+                        "field_id": "short-text",
+                        "value": "fine",
+                        "label": "Short text",
+                    }
+                ]
+            },
+        )
+
     def test_validation(self):
         self.document.blocks = {
             "text-id": {"@type": "text"},

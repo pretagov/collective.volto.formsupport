@@ -1,3 +1,6 @@
+import re
+from typing import Any
+
 from collective.volto.formsupport import _
 from collective.volto.formsupport.validation import getValidations
 from plone import api
@@ -33,6 +36,19 @@ show_when_validators = {
 }
 
 
+def _as_mapping(display_values):
+    """A field's display values as {value: label}.
+
+    Stored either as that map, or as an ordered list of {"value", "label"}
+    (a choice field's options, each with the value it submits and the label a
+    person reads). The list keeps the options' order where it is authored;
+    here only the lookup matters.
+    """
+    if isinstance(display_values, list):
+        return {item["value"]: item["label"] for item in display_values}
+    return display_values
+
+
 class Field:
     def __init__(self, field_data: dict[str, Any]):
         def _attribute(attribute_name: str):
@@ -49,19 +65,18 @@ class Field:
         _attribute("use_as_reply_bcc")
         self.required = field_data.get("required")
         self.validations = field_data.get("validations", {})
-        self._display_value_mapping = field_data.get("dislpay_value_mapping")
+        self._display_value_mapping = _as_mapping(field_data.get("display_value_mapping"))
         self._value = field_data.get("value", "")
         self._custom_field_id = field_data.get("custom_field_id")
-        self._label = field_data.get("label")
+        self._label = field_data.get("label", "")
         self._field_id = field_data.get("field_id", "")
 
     @property
     def display_value(self):
-        if self._display_value_mapping:
-            return self._display_value_mapping.get(self._value, self._value)
+        mapping = self._display_value_mapping or {}
         if isinstance(self._value, list):
-            return  ", ".join(self._value)
-        return self._value
+            return ", ".join(mapping.get(value, value) for value in self._value)
+        return mapping.get(self._value, self._value)
 
     @property
     def internal_value(self):
@@ -97,7 +112,7 @@ class Field:
         errors = {}
 
         if self.required and not self.internal_value:
-            errors['required'] = 'This field is required'
+            errors["required"] = "This field is required"
 
         available_validations = [
             validation
@@ -117,7 +132,7 @@ class Field:
                 errors[validation._name] = error
 
         return (
-            errors if errors else None
+            errors
         )  # Return None to match how errors normally return in z3c.form
 
 
@@ -140,27 +155,26 @@ class AttachmentField(Field):
 
 class EmailField(Field):
     def validate(self, request):
-        super().validate(request=request)
+        errors = super().validate(request=request)
         if not self.internal_value:
             return
-        if not _isemail(self.internal_value or ''):
-            raise BadRequest(
-                translate(
-                    _(
-                        "wrong_email",
-                        default='Email not valid in "${field}" field.',
-                        mapping={
-                            "field": self.label,
-                        },
-                    ),
-                    context=request,
-                )
+        if not _isemail(self.internal_value or ""):
+            errors["validation"] = translate(
+                _(
+                    "wrong_email",
+                    default='Email not valid in "${field}" field.',
+                    mapping={
+                        "field": self.label,
+                    },
+                ),
+                context=request,
             )
+        return errors
 
 
 class DateField(Field):
     def display_value(self):
-        return api.portal.get_localized_time(self.internal_value or '')
+        return api.portal.get_localized_time(self.internal_value or "")
 
 class TimeField(Field):
     def display_value(self):
